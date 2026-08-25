@@ -25,12 +25,7 @@ export function getDriveClient() {
 
 export async function getAccessToken() {
   if (!config.clientId || !config.clientSecret || !config.refreshToken) {
-    throw new Error(
-      `Missing Withings credentials:\n` +
-      `- WITHINGS_CLIENT_ID: ${config.clientId ? 'Present' : 'MISSING'}\n` +
-      `- WITHINGS_CLIENT_SECRET: ${config.clientSecret ? 'Present' : 'MISSING'}\n` +
-      `- WITHINGS_REFRESH_TOKEN: ${config.refreshToken ? 'Present' : 'MISSING'}`
-    );
+    throw new Error('Missing Withings credentials in environment variables.');
   }
 
   const params = new URLSearchParams({
@@ -45,9 +40,7 @@ export async function getAccessToken() {
     'https://wbsapi.withings.net/v2/oauth2',
     params.toString(),
     {
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded'
-      }
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
     }
   );
 
@@ -59,20 +52,23 @@ export async function getAccessToken() {
 }
 
 export function decodeMeasurements(measuregrps) {
-  return measuregrps.map(group => {
-    const timestamp = new Date(group.date * 1000).toISOString();
-    const row = {
-      timestamp,
-      date: timestamp.split('T')[0],
-      grpid: group.grpid
-    };
+  const dailyMap = new Map();
+
+  // Sort chronologically so later measurements on the same day take precedence
+  const sortedGroups = [...measuregrps].sort((a, b) => a.date - b.date);
+
+  for (const group of sortedGroups) {
+    const dateStr = new Date(group.date * 1000).toISOString().split('T')[0];
+    const current = dailyMap.get(dateStr) || { date: dateStr };
 
     for (const measure of group.measures) {
       const typeName = config.measureTypes[measure.type];
       if (typeName) {
-        row[typeName] = parseFloat((measure.value * Math.pow(10, measure.unit)).toFixed(3));
+        current[typeName] = parseFloat((measure.value * Math.pow(10, measure.unit)).toFixed(3));
       }
     }
-    return row;
-  });
+    dailyMap.set(dateStr, current);
+  }
+
+  return Array.from(dailyMap.values());
 }
