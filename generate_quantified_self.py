@@ -1,11 +1,16 @@
 import io
-import json
 import os
 import re
 import sys
 from typing import Optional, Union
 import numpy as np
 import pandas as pd
+
+# Add repo root to path to access garmin modules
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
+from garmin.drive_client import DriveClient
+import garmin.config as garmin_cfg
 
 # ==========================================
 # Configurable Demographic & Export Settings
@@ -17,13 +22,11 @@ MAX_HR: int = 185
 OUTPUT_FILE: str = "quantified_self_data.csv"
 DAYS_TO_EXPORT: int = 730
 
-LOCAL_GARMIN_CSV: str = "garmin_data.csv"
-LOCAL_WITHINGS_CSV: str = "withings_data.csv"
+# Exact master file names from your existing repository config
+GARMIN_FILENAME: str = getattr(garmin_cfg, "CSV_FILENAME", "garmin_data.csv")
+WITHINGS_FILENAME: str = "withings_data.csv"
 
 
-# ==========================================
-# Parsing & Formatting Utilities
-# ==========================================
 def parse_pace_to_decimal(pace_val: Union[str, float, int, None]) -> Optional[float]:
     """Converts MM:SS or numeric pace representation to decimal minutes (e.g., 04:30 -> 4.5)."""
     if pd.isna(pace_val) or pace_val == "" or pace_val is None:
@@ -58,116 +61,43 @@ def parse_time_to_hh_mm(time_val: Union[str, pd.Timestamp, None]) -> Optional[st
         return np.nan
 
 
-# ==========================================
-# Google Drive Integration
-# ==========================================
-def get_drive_service():
-    """Initializes Google Drive API client from environment variables."""
-    from google.oauth2 import service_account
-    from googleapiclient.discovery import build
+def fetch_csv(drive: DriveClient, filename: str) -> pd.DataFrame:
+    """Fetches CSV using existing DriveClient methods or local disk."""
+    # Check local filesystem
+    for path in [filename, os.path.join("garmin", filename), os.path.join("withings", filename)]:
+        if os.path.exists(path):
+            return pd.read_csv(path)
 
-    creds_raw = os.environ.get("GOOGLE_CREDENTIALS")
-    if not creds_raw:
-        return None
-
+    # Fetch from Google Drive using existing repo client
     try:
-        creds_dict = json.loads(creds_raw)
-        credentials = service_account.Credentials.from_service_account_info(
-            creds_dict, scopes=["https://www.googleapis.com/auth/drive"]
-        )
-        return build("drive", "v3", credentials=credentials)
+        content = drive.download_file_content(filename) if hasattr(drive, "download_file_content") else None
+        if content:
+            return pd.read_csv(io.BytesIO(content.encode("utf-8") if isinstance(content, str) else content))
     except Exception as e:
-        print(f"Failed to initialize Drive service: {e}")
-        return None
-
-
-def fetch_csv_from_drive_or_local(filename: str, service) -> pd.DataFrame:
-    """Loads CSV from local file path or downloads directly from Google Drive."""
-    # Check local filesystem first
-    possible_paths = [
-        filename,
-        os.path.join("garmin", filename),
-        os.path.join("withings", filename),
-    ]
-    for p in possible_paths:
-        if os.path.exists(p):
-            print(f"Loading local file: {p}")
-            return pd.read_csv(p)
-
-    # If not found locally, fetch from Drive
-    if service:
-        folder_id = os.environ.get("GOOGLE_DRIVE_FOLDER_ID")
-        query = f"name = '{filename}' and trashed = false"
-        if folder_id:
-            query += f" and '{folder_id}' in parents"
-
-        response = service.files().list(q=query, fields="files(id, name)").execute()
-        files = response.get("files", [])
-        if files:
-            file_id = files[0]["id"]
-            print(f"Downloading {filename} from Google Drive (ID: {file_id})...")
-            content = service.files().get_media(fileId=file_id).execute()
-            return pd.read_csv(io.BytesIO(content))
+        print(f"Notice: Could not fetch {filename} via DriveClient download: {e}")
 
     return pd.DataFrame()
 
 
-def upload_quantified_self_to_drive(file_path: str, service) -> None:
-    """Uploads or replaces the final CSV file on Google Drive."""
-    if not service:
-        print("Google Drive credentials not found. File saved locally only.")
-        return
-
-    from googleapiclient.http import MediaFileUpload
-
-    file_name = os.path.basename(file_path)
-    folder_id = os.environ.get("GOOGLE_DRIVE_FOLDER_ID")
-
-    query = f"name = '{file_name}' and trashed = false"
-    if folder_id:
-        query += f" and '{folder_id}' in parents"
-
-    response = service.files().list(q=query, fields="files(id, name)").execute()
-    files = response.get("files", [])
-
-    media = MediaFileUpload(file_path, mimetype="text/csv", resumable=True)
-
-    if files:
-        file_id = files[0]["id"]
-        print(f"Updating existing '{file_name}' on Google Drive (ID: {file_id})...")
-        service.files().update(fileId=file_id, media_body=media).execute()
-    else:
-        print(f"Creating new '{file_name}' on Google Drive...")
-        file_metadata = {"name": file_name}
-        if folder_id:
-            file_metadata["parents"] = [folder_id]
-        service.files().create(body=file_metadata, media_body=media).execute()
-
-    print("Google Drive sync completed successfully.")
-
-
-# ==========================================
-# Core Data Pipeline
-# ==========================================
 def build_quantified_self_dataset() -> None:
-    drive_service = get_drive_service()
+    drive = DriveClient()
 
-    garmin_df = fetch_csv_from_drive_or_local(LOCAL_GARMIN_CSV, drive_service)
-    withings_df = fetch_csv_from_drive_or_local(LOCAL_WITHINGS_CSV, drive_service)
+    garmin_df = fetch_csv(drive, GARMIN_FILENAME)
+    withings_df = fetch_csv(drive, WITHINGS_FILENAME)
 
     if garmin_df.empty and withings_df.empty:
-        raise ValueError("Could not locate Garmin or Withings datasets locally or on Google Drive.")
+        raise ValueError(f"Could not load '{GARMIN_FILENAME}' or '{WITHINGS_FILENAME}'.")
 
-    # 1. Standardize date column across source dataframes
+    # Standardize date column
     for df_source in [garmin_df, withings_df]:
         if not df_source.empty:
             date_col = next(
-                (c for c in df_source.columns if c.lower() in ["date", "date_yyyy_mm_dd", "day"]),
+                (c for c in df_source.columns if c.lower() in ["date", "date_yyyy_mm_dd", "day", "timestamp"]),
                 df_source.columns[0],
             )
             df_source["Date_YYYY_MM_DD"] = pd.to_datetime(df_source[date_col]).dt.strftime("%Y-%m-%d")
 
-    # 2. Outer merge on Date across entire historical timeline
+    # Merge on full calendar timeline
     if not garmin_df.empty and not withings_df.empty:
         merged = pd.merge(garmin_df, withings_df, on="Date_YYYY_MM_DD", how="outer")
     elif not garmin_df.empty:
@@ -178,7 +108,6 @@ def build_quantified_self_dataset() -> None:
     merged["Date_YYYY_MM_DD"] = pd.to_datetime(merged["Date_YYYY_MM_DD"])
     merged = merged.sort_values("Date_YYYY_MM_DD").reset_index(drop=True)
 
-    # 3. Continuous daily calendar reindexing (1 row = 1 calendar day)
     full_date_range = pd.date_range(
         start=merged["Date_YYYY_MM_DD"].min(),
         end=merged["Date_YYYY_MM_DD"].max(),
@@ -192,7 +121,6 @@ def build_quantified_self_dataset() -> None:
     )
     df["Date_YYYY_MM_DD"] = df["Date_YYYY_MM_DD"].dt.strftime("%Y-%m-%d")
 
-    # Helper function for case-insensitive column matching
     def get_source_series(candidates, default_val=np.nan):
         for candidate in candidates:
             for col in df.columns:
@@ -200,7 +128,7 @@ def build_quantified_self_dataset() -> None:
                     return df[col]
         return pd.Series(default_val, index=df.index)
 
-    # 4. Map and cast raw pass-through columns
+    # Pass-through column mapping
     df["Daily_Running_Distance_km"] = pd.to_numeric(
         get_source_series(["Daily_Running_Distance_km", "running_distance_km", "running_distance", "run_distance"]),
         errors="coerce",
@@ -278,7 +206,7 @@ def build_quantified_self_dataset() -> None:
         errors="coerce",
     )
 
-    # 5. Tier 1 Derived Metrics (Calculated on Full History)
+    # Derived Tier 1 Metrics
     df["Running_Distance_28d_Total_km"] = (
         df["Daily_Running_Distance_km"].rolling(window=28, min_periods=1).sum().round(2)
     )
@@ -292,7 +220,7 @@ def build_quantified_self_dataset() -> None:
         raw_body_fat.rolling(window=7, min_periods=1).mean().round(1)
     )
 
-    # 6. Tier 2 Non-Overlapping Baseline HRV Z-Score
+    # Derived Tier 2 Non-Overlapping Z-Score
     shifted_hrv = df["Overnight_HRV_RMSSD_ms"].shift(7)
     baseline_60d_mean = shifted_hrv.rolling(window=60, min_periods=30).mean()
     baseline_60d_std = shifted_hrv.rolling(window=60, min_periods=30).std().replace(0, np.nan)
@@ -301,7 +229,7 @@ def build_quantified_self_dataset() -> None:
         (df["HRV_RMSSD_7d_Average_ms"] - baseline_60d_mean) / baseline_60d_std
     ).round(2)
 
-    # 7. Exact Output Schema Ordering & 730-Day Slicing
+    # Output schema & 730-day export slice
     output_schema = [
         "Date_YYYY_MM_DD",
         "Daily_Running_Distance_km",
@@ -347,7 +275,7 @@ def build_quantified_self_dataset() -> None:
 
     export_df = df[output_schema].tail(DAYS_TO_EXPORT).copy()
 
-    # 8. Row 1 Comment Header & Local CSV Export
+    # Inject line 1 comment
     header_string = f"# Context: Male, Age: {AGE}, Height: {HEIGHT_CM} cm, Max HR: {MAX_HR} bpm\n"
     csv_body = export_df.to_csv(index=False, na_rep="")
 
@@ -355,10 +283,12 @@ def build_quantified_self_dataset() -> None:
         f.write(header_string)
         f.write(csv_body)
 
-    print(f"Generated {OUTPUT_FILE} with {len(export_df)} daily rows.")
-
-    # 9. Upload to Google Drive
-    upload_quantified_self_to_drive(OUTPUT_FILE, drive_service)
+    # Upload using repo's existing DriveClient
+    if hasattr(drive, "upload_file"):
+        drive.upload_file(OUTPUT_FILE)
+    elif hasattr(drive, "upload_csv"):
+        drive.upload_csv(OUTPUT_FILE)
+    print(f"Successfully generated and synced {OUTPUT_FILE}.")
 
 
 if __name__ == "__main__":
