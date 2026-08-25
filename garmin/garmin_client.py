@@ -1,83 +1,56 @@
-import io
-import json
 import logging
 import os
-from typing import Optional
-from google.oauth2 import service_account
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseUpload, MediaIoBaseDownload
-from exceptions import DriveSyncError
+from typing import Any, Dict, List, Optional
+import garth
+from garminconnect import (
+    Garmin,
+    GarminConnectAuthenticationError,
+    GarminConnectConnectionError,
+    GarminConnectTooManyRequestsError,
+)
 
 logger = logging.getLogger(__name__)
 
-class DriveClient:
-    def __init__(self, service_account_info_or_path: str, folder_id: str):
-        self.folder_id = folder_id
-        scopes = ['https://www.googleapis.com/auth/drive']
-        
-        if not service_account_info_or_path:
-            raise DriveSyncError("GOOGLE_SERVICE_ACCOUNT_JSON is not configured.")
+class GarminClient:
+    def __init__(self, email: Optional[str] = None, password: Optional[str] = None, tokenstore: Optional[str] = None):
+        self.email = email
+        self.password = password
+        self.tokenstore = os.path.expanduser(tokenstore) if tokenstore else None
+        self.client: Optional[Garmin] = None
 
+    def login(self) -> None:
         try:
-            if os.path.exists(service_account_info_or_path):
-                self.creds = service_account.Credentials.from_service_account_file(
-                    service_account_info_or_path, scopes=scopes
-                )
-            else:
-                info = json.loads(service_account_info_or_path)
-                self.creds = service_account.Credentials.from_service_account_info(
-                    info, scopes=scopes
-                )
-            self.service = build('drive', 'v3', credentials=self.creds)
-        except Exception as e:
-            raise DriveSyncError(f"Failed to initialize Drive client: {e}")
+            if self.tokenstore and os.path.exists(self.tokenstore) and os.listdir(self.tokenstore):
+                logger.info(f"Resuming Garth session from {self.tokenstore}")
+                garth.resume(self.tokenstore)
+                self.client = Garmin()
+                self.client.login()
+                logger.info("Successfully resumed Garmin session.")
+                return
 
-    def find_file(self, filename: str) -> Optional[str]:
-        try:
-            query = f"name = '{filename}' and '{self.folder_id}' in parents and trashed = false"
-            results = self.service.files().list(
-                q=query,
-                fields="files(id, name)",
-                supportsAllDrives=True,
-                includeItemsFromAllDrives=True
-            ).execute()
-            files = results.get('files', [])
-            return files[0]['id'] if files else None
-        except Exception as e:
-            raise DriveSyncError(f"Failed searching for {filename}: {e}")
+            if self.email and self.password:
+                logger.info("Logging into Garmin Connect with email/password...")
+                self.client = Garmin(self.email, self.password)
+                self.client.login()
+                if self.tokenstore:
+                    os.makedirs(self.tokenstore, exist_ok=True)
+                    garth.save(self.tokenstore)
+                    logger.info(f"Saved session tokens to {self.tokenstore}")
+                return
 
-    def download_csv(self, file_id: str) -> io.BytesIO:
-        try:
-            request = self.service.files().get_media(fileId=file_id, supportsAllDrives=True)
-            fh = io.BytesIO()
-            downloader = MediaIoBaseDownload(fh, request)
-            done = False
-            while not done:
-                _, done = downloader.next_chunk()
-            fh.seek(0)
-            return fh
+            raise GarminConnectAuthenticationError("Missing credentials or valid token store.")
         except Exception as e:
-            raise DriveSyncError(f"Failed downloading file ID {file_id}: {e}")
+            logger.error(f"Garmin authentication failed: {e}")
+            raise
 
-    def upload_or_update_csv(self, filename: str, csv_content: str) -> None:
-        try:
-            file_id = self.find_file(filename)
-            media = MediaIoBaseUpload(io.BytesIO(csv_content.encode('utf-8')), mimetype='text/csv', resumable=True)
-            
-            if file_id:
-                self.service.files().update(
-                    fileId=file_id,
-                    media_body=media,
-                    supportsAllDrives=True
-                ).execute()
-                logger.info(f"Updated {filename} on Google Drive.")
-            else:
-                file_metadata = {'name': filename, 'parents': [self.folder_id]}
-                self.service.files().create(
-                    body=file_metadata,
-                    media_body=media,
-                    supportsAllDrives=True
-                ).execute()
-                logger.info(f"Created {filename} on Google Drive.")
-        except Exception as e:
-            raise DriveSyncError(f"Failed uploading {filename}: {e}")
+    def get_user_summary(self, date_str: str) -> Dict[str, Any]:
+        return self.client.get_user_summary(date_str)
+
+    def get_sleep_data(self, date_str: str) -> Dict[str, Any]:
+        return self.client.get_sleep_data(date_str)
+
+    def get_hrv_data(self, date_str: str) -> Dict[str, Any]:
+        return self.client.get_hrv_data(date_str)
+
+    def get_activities(self, start: int = 0, limit: int = 50) -> List[Dict[str, Any]]:
+        return self.client.get_activities(start, limit)
