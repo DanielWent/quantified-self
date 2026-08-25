@@ -5,8 +5,9 @@ export const config = {
   clientId: process.env.WITHINGS_CLIENT_ID,
   clientSecret: process.env.WITHINGS_CLIENT_SECRET,
   refreshToken: process.env.WITHINGS_REFRESH_TOKEN,
-  tokenFile: '.withings_tokens.json',
-  outputCsv: '../data/withings_measurements.csv',
+  folderId: process.env.GOOGLE_DRIVE_FOLDER_ID,
+  serviceAccountJson: process.env.GOOGLE_SERVICE_ACCOUNT_JSON,
+  outputFileName: 'withings_measurements.csv',
   measureTypes: {
     1: 'weight_kg',
     4: 'height_m',
