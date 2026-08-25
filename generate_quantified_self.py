@@ -1,4 +1,5 @@
 import io
+import json
 import os
 import re
 import sys
@@ -71,8 +72,44 @@ def parse_time_to_hh_mm(time_val: Union[str, pd.Timestamp, None]) -> Optional[st
         return np.nan
 
 
-def fetch_csv(drive: DriveClient, filename: str) -> pd.DataFrame:
-    """Loads CSV from local paths or downloads directly from Google Drive."""
+# ==========================================
+# Google Drive Initialization & Helpers
+# ==========================================
+def get_drive_client() -> Optional[DriveClient]:
+    """Instantiates DriveClient using environment variables or repository config."""
+    service_account = (
+        os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON")
+        or os.environ.get("GOOGLE_CREDENTIALS")
+        or getattr(garmin_cfg, "GOOGLE_SERVICE_ACCOUNT_JSON", None)
+        or getattr(garmin_cfg, "SERVICE_ACCOUNT_INFO", None)
+    )
+    folder_id = (
+        os.environ.get("GOOGLE_DRIVE_FOLDER_ID")
+        or getattr(garmin_cfg, "GOOGLE_DRIVE_FOLDER_ID", None)
+        or getattr(garmin_cfg, "FOLDER_ID", None)
+    )
+
+    if not service_account or not folder_id:
+        print("[Drive] Notice: Missing service account credentials or folder ID.")
+        return None
+
+    # Parse JSON if string representation was passed
+    creds_payload = service_account
+    if isinstance(service_account, str) and service_account.strip().startswith("{"):
+        try:
+            creds_payload = json.loads(service_account)
+        except Exception:
+            creds_payload = service_account
+
+    try:
+        return DriveClient(creds_payload, folder_id)
+    except Exception as e:
+        print(f"[Drive] Failed to instantiate DriveClient: {e}")
+        return None
+
+
+def fetch_csv(drive: Optional[DriveClient], filename: str) -> pd.DataFrame:
+    """Loads CSV from local filesystem paths or via DriveClient."""
     local_candidates = [
         filename,
         os.path.join(REPO_ROOT, filename),
@@ -81,31 +118,40 @@ def fetch_csv(drive: DriveClient, filename: str) -> pd.DataFrame:
     ]
     for path in local_candidates:
         if os.path.exists(path):
+            print(f"[Dataset] Loaded local file: {path}")
             return pd.read_csv(path)
 
-    # Attempt fetching using DriveClient download methods
-    for method_name in ["download_file_content", "download_csv", "get_file_content"]:
-        if hasattr(drive, method_name):
-            try:
-                content = getattr(drive, method_name)(filename)
-                if content:
-                    if isinstance(content, str):
-                        return pd.read_csv(io.StringIO(content))
-                    return pd.read_csv(io.BytesIO(content))
-            except Exception as e:
-                print(f"Notice: Could not download {filename} via DriveClient.{method_name}: {e}")
+    # Attempt fetching using DriveClient methods if available
+    if drive:
+        for method_name in ["download_file_content", "download_csv", "get_file_content", "download_file"]:
+            if hasattr(drive, method_name):
+                try:
+                    result = getattr(drive, method_name)(filename)
+                    if isinstance(result, str) and os.path.exists(result):
+                        return pd.read_csv(result)
+                    elif isinstance(result, str):
+                        return pd.read_csv(io.StringIO(result))
+                    elif isinstance(result, bytes):
+                        return pd.read_csv(io.BytesIO(result))
+                except Exception as e:
+                    print(f"[Drive] Method {method_name} failed for {filename}: {e}")
 
     return pd.DataFrame()
 
 
+# ==========================================
+# Main Processing Pipeline
+# ==========================================
 def build_quantified_self_dataset() -> None:
-    drive = DriveClient()
+    drive = get_drive_client()
 
     garmin_df = fetch_csv(drive, GARMIN_FILENAME)
     withings_df = fetch_csv(drive, WITHINGS_FILENAME)
 
     if garmin_df.empty and withings_df.empty:
-        raise ValueError(f"Could not load '{GARMIN_FILENAME}' or '{WITHINGS_FILENAME}' locally or from Google Drive.")
+        raise ValueError(
+            f"Could not load '{GARMIN_FILENAME}' or '{WITHINGS_FILENAME}' locally or from Google Drive."
+        )
 
     # Standardize date column names
     for df_source in [garmin_df, withings_df]:
@@ -127,7 +173,7 @@ def build_quantified_self_dataset() -> None:
     merged["Date_YYYY_MM_DD"] = pd.to_datetime(merged["Date_YYYY_MM_DD"])
     merged = merged.sort_values("Date_YYYY_MM_DD").reset_index(drop=True)
 
-    # 1 row = 1 calendar day across the complete historical timeline
+    # Reindex across a complete daily calendar range (1 row = 1 calendar day)
     full_dates = pd.date_range(
         start=merged["Date_YYYY_MM_DD"].min(),
         end=merged["Date_YYYY_MM_DD"].max(),
@@ -148,7 +194,7 @@ def build_quantified_self_dataset() -> None:
                     return df[col]
         return pd.Series(default_val, index=df.index)
 
-    # Raw pass-through mapping
+    # Raw pass-through mappings
     df["Daily_Running_Distance_km"] = pd.to_numeric(
         get_source_series(["Daily_Running_Distance_km", "running_distance_km", "running_distance", "run_distance"]),
         errors="coerce",
@@ -249,7 +295,7 @@ def build_quantified_self_dataset() -> None:
         (df["HRV_RMSSD_7d_Average_ms"] - baseline_60d_mean) / baseline_60d_std
     ).round(2)
 
-    # 24 Required Schema Columns
+    # Output Schema Ordering & 730-Day Export Slicing
     output_schema = [
         "Date_YYYY_MM_DD",
         "Daily_Running_Distance_km",
@@ -302,16 +348,17 @@ def build_quantified_self_dataset() -> None:
         f.write(header_string)
         f.write(csv_body)
 
-    for upload_method in ["upload_file", "upload_csv", "upload_or_replace_file"]:
-        if hasattr(drive, upload_method):
-            try:
-                getattr(drive, upload_method)(OUTPUT_FILE)
-                print(f"Uploaded {OUTPUT_FILE} to Google Drive using {upload_method}.")
-                break
-            except Exception as e:
-                print(f"Notice: Failed to upload using DriveClient.{upload_method}: {e}")
+    if drive:
+        for upload_method in ["upload_file", "upload_csv", "upload_or_replace_file"]:
+            if hasattr(drive, upload_method):
+                try:
+                    getattr(drive, upload_method)(OUTPUT_FILE)
+                    print(f"[Drive] Uploaded {OUTPUT_FILE} via {upload_method}.")
+                    break
+                except Exception as e:
+                    print(f"[Drive] Upload via {upload_method} failed: {e}")
 
-    print(f"Successfully generated {OUTPUT_FILE} ({len(export_df)} rows).")
+    print(f"Successfully generated {OUTPUT_FILE} ({len(export_df)} daily rows).")
 
 
 if __name__ == "__main__":
