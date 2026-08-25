@@ -2,7 +2,7 @@ name: Daily Health Data Sync
 
 on:
   schedule:
-    - cron: '0 4 * * *'  # Scheduled daily run (defaults to 7 days)
+    - cron: '0 4 * * *'  # Runs daily at 04:00 UTC (past 7 days)
   workflow_dispatch:
     inputs:
       days:
@@ -25,8 +25,7 @@ jobs:
           cache: 'pip'
 
       - name: Install Python Dependencies
-        run: |
-          pip install -r garmin/requirements.txt
+        run: pip install -r garmin/requirements.txt
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -37,7 +36,7 @@ jobs:
         working-directory: withings
         run: npm install
 
-      - name: Sync Garmin Data
+      - name: Run Garmin Sync
         env:
           GARMIN_EMAIL: ${{ secrets.GARMIN_EMAIL }}
           GARMIN_PASSWORD: ${{ secrets.GARMIN_PASSWORD }}
@@ -45,9 +44,9 @@ jobs:
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
           GOOGLE_DRIVE_FOLDER_ID: ${{ secrets.GOOGLE_DRIVE_FOLDER_ID }}
         run: |
-          python garmin/sync_garmin.py --days ${{ inputs.days || '7' }}
+          python garmin/main.py --days ${{ inputs.days || '7' }}
 
-      - name: Sync Withings Data
+      - name: Run Withings Sync
         working-directory: withings
         env:
           WITHINGS_CLIENT_ID: ${{ secrets.WITHINGS_CLIENT_ID }}
