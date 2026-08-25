@@ -4,25 +4,31 @@ from datetime import datetime, timedelta
 import pandas as pd
 from dotenv import load_dotenv
 from garmin_client import GarminSyncClient
+from drive_client import DriveClient
 from parser import parse_daily_summary, parse_activity
 
 load_dotenv()
 
-DAILY_CSV_PATH = os.path.join("data", "garmin_daily_summary.csv")
-ACTIVITIES_CSV_PATH = os.path.join("data", "garmin_activities.csv")
-
-def update_csv(new_df: pd.DataFrame, file_path: str, primary_key: str):
-    os.makedirs(os.path.dirname(file_path), exist_ok=True)
-    if os.path.exists(file_path):
-        existing_df = pd.read_csv(file_path)
+def sync_to_drive(drive_client: DriveClient, filename: str, new_df: pd.DataFrame, key: str):
+    file_id = drive_client.find_file(filename)
+    if file_id:
+        existing_stream = drive_client.download_csv(file_id)
+        existing_df = pd.read_csv(existing_stream)
         combined_df = pd.concat([existing_df, new_df], ignore_index=True)
-        combined_df.drop_duplicates(subset=[primary_key], keep="last", inplace=True)
-        combined_df.sort_values(by=primary_key, ascending=True, inplace=True)
+        combined_df.drop_duplicates(subset=[key], keep="last", inplace=True)
+        combined_df.sort_values(by=key, ascending=True, inplace=True)
     else:
         combined_df = new_df
-    combined_df.to_csv(file_path, index=False)
+
+    csv_content = combined_df.to_csv(index=False)
+    drive_client.upload_or_update_csv(filename, csv_content)
+    print(f"Updated {filename} on Google Drive.")
 
 def main(days_back: int = 7):
+    service_account_json = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON")
+    drive_folder_id = os.getenv("GOOGLE_DRIVE_FOLDER_ID")
+    
+    drive = DriveClient(service_account_json, drive_folder_id)
     client = GarminSyncClient()
     client.login()
 
@@ -43,13 +49,13 @@ def main(days_back: int = 7):
         curr_date += timedelta(days=1)
 
     if daily_rows:
-        update_csv(pd.DataFrame(daily_rows), DAILY_CSV_PATH, primary_key="date")
+        sync_to_drive(drive, "garmin_daily_summary.csv", pd.DataFrame(daily_rows), key="date")
 
     try:
         activities = client.get_activities(start_date.strftime("%Y-%m-%d"), limit=50)
         parsed_activities = [parse_activity(a) for a in activities]
         if parsed_activities:
-            update_csv(pd.DataFrame(parsed_activities), ACTIVITIES_CSV_PATH, primary_key="activity_id")
+            sync_to_drive(drive, "garmin_activities.csv", pd.DataFrame(parsed_activities), key="activity_id")
     except Exception as e:
         print(f"Failed to sync activities: {e}")
 
