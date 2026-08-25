@@ -22,9 +22,16 @@ async function fetchWithingsData(daysBack = 7) {
     category: 1
   });
 
-  const response = await axios.post('https://wbsapi.withings.net/measure', params, {
-    headers: { Authorization: `Bearer ${token}` }
-  });
+  const response = await axios.post(
+    'https://wbsapi.withings.net/measure',
+    params.toString(),
+    {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/x-www-form-urlencoded'
+      }
+    }
+  );
 
   if (response.data.status !== 0) {
     throw new Error(`Withings API Error: ${JSON.stringify(response.data)}`);
@@ -82,23 +89,43 @@ async function main() {
   try {
     const days = getDaysArg();
     const drive = getDriveClient();
-    const records = await fetchWithingsData(days);
+    const newDailyRecords = await fetchWithingsData(days);
 
     const { fileId, rows: existingRows } = await getExistingDriveCSV(drive, config.outputFileName, config.folderId);
-    const headers = ['timestamp', 'date', 'grpid', 'weight_kg', 'fat_ratio_pct', 'fat_mass_kg', 'muscle_mass_kg', 'hydration_kg', 'bone_mass_kg', 'pulse_wave_velocity_mps', 'vascular_age'];
+    
+    // Canonical Withings columns (one row per date, grpid removed)
+    const headers = [
+      'date',
+      'weight_kg',
+      'fat_ratio_pct',
+      'fat_mass_kg',
+      'fat_free_mass_kg',
+      'muscle_mass_kg',
+      'hydration_kg',
+      'bone_mass_kg',
+      'pulse_wave_velocity_mps',
+      'vascular_age'
+    ];
 
     const recordMap = new Map();
-    existingRows.forEach(r => recordMap.set(String(r.grpid), r));
-    records.forEach(r => recordMap.set(String(r.grpid), r));
+    existingRows.forEach(row => {
+      if (row.date) recordMap.set(row.date, row);
+    });
 
-    const sortedRows = Array.from(recordMap.values()).sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+    // Merge new consolidated records into the existing history
+    newDailyRecords.forEach(record => {
+      const existing = recordMap.get(record.date) || {};
+      recordMap.set(record.date, { ...existing, ...record });
+    });
+
+    const sortedRows = Array.from(recordMap.values()).sort((a, b) => a.date.localeCompare(b.date));
     const csvContent = [
       headers.join(','),
-      ...sortedRows.map(row => headers.map(h => row[h] !== undefined ? row[h] : '').join(','))
+      ...sortedRows.map(row => headers.map(h => row[h] !== undefined && row[h] !== null ? row[h] : '').join(','))
     ].join('\n');
 
     await uploadCSVToDrive(drive, config.outputFileName, config.folderId, fileId, csvContent);
-    console.log(`Withings sync complete (${days} days requested). Total rows on Drive: ${sortedRows.length}`);
+    console.log(`Withings sync complete (${days} days requested). Total Drive rows: ${sortedRows.length}`);
   } catch (err) {
     console.error('Error in Withings sync:', err);
     process.exit(1);
