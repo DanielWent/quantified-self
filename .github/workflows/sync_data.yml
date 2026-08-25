@@ -2,8 +2,14 @@ name: Daily Health Data Sync
 
 on:
   schedule:
-    - cron: '0 4 * * *'  # Runs daily at 04:00 UTC
+    - cron: '0 4 * * *'  # Scheduled daily run (defaults to 7 days)
   workflow_dispatch:
+    inputs:
+      days:
+        description: 'Number of days of data to sync'
+        required: true
+        default: '7'
+        type: string
 
 jobs:
   sync:
@@ -39,7 +45,7 @@ jobs:
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
           GOOGLE_DRIVE_FOLDER_ID: ${{ secrets.GOOGLE_DRIVE_FOLDER_ID }}
         run: |
-          python garmin/sync_garmin.py --days 14
+          python garmin/sync_garmin.py --days ${{ inputs.days || '7' }}
 
       - name: Sync Withings Data
         working-directory: withings
@@ -50,4 +56,4 @@ jobs:
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
           GOOGLE_DRIVE_FOLDER_ID: ${{ secrets.GOOGLE_DRIVE_FOLDER_ID }}
         run: |
-          node index.js
+          node index.js --days ${{ inputs.days || '7' }}
