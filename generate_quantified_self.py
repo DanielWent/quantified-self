@@ -7,22 +7,19 @@ from typing import Optional, Union
 import numpy as np
 import pandas as pd
 
-# ==========================================
-# Path Configuration for Submodule Imports
-# ==========================================
 REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
 GARMIN_DIR = os.path.join(REPO_ROOT, "garmin")
 WITHINGS_DIR = os.path.join(REPO_ROOT, "withings")
 
-for path in [GARMIN_DIR, WITHINGS_DIR, REPO_ROOT]:
-    if path not in sys.path:
-        sys.path.insert(0, path)
+for p in [GARMIN_DIR, WITHINGS_DIR, REPO_ROOT]:
+    if p not in sys.path:
+        sys.path.insert(0, p)
 
 from drive_client import DriveClient
 import config as garmin_cfg
 
 # ==========================================
-# Configurable Demographic & Export Settings
+# Static Demographic & Export Settings
 # ==========================================
 AGE: int = 40
 HEIGHT_CM: int = 185
@@ -35,11 +32,8 @@ GARMIN_FILENAME: str = getattr(garmin_cfg, "CSV_FILENAME", "garmin_data.csv")
 WITHINGS_FILENAME: str = "withings_data.csv"
 
 
-# ==========================================
-# Parsing & Formatting Utilities
-# ==========================================
 def parse_pace_to_decimal(pace_val: Union[str, float, int, None]) -> Optional[float]:
-    """Converts MM:SS or numeric pace representation to decimal minutes (e.g., 04:30 -> 4.5)."""
+    """Converts MM:SS or numeric pace representation to decimal minutes (e.g. 04:30 -> 4.5)."""
     if pd.isna(pace_val) or pace_val == "" or pace_val is None:
         return np.nan
     pace_str = str(pace_val).strip()
@@ -72,11 +66,7 @@ def parse_time_to_hh_mm(time_val: Union[str, pd.Timestamp, None]) -> Optional[st
         return np.nan
 
 
-# ==========================================
-# Google Drive Initialization & Helpers
-# ==========================================
 def get_drive_client() -> Optional[DriveClient]:
-    """Instantiates DriveClient using environment variables or repository config."""
     service_account = (
         os.environ.get("GOOGLE_SERVICE_ACCOUNT_JSON")
         or os.environ.get("GOOGLE_CREDENTIALS")
@@ -90,10 +80,8 @@ def get_drive_client() -> Optional[DriveClient]:
     )
 
     if not service_account or not folder_id:
-        print("[Drive] Notice: Missing service account credentials or folder ID.")
         return None
 
-    # Parse JSON if string representation was passed
     creds_payload = service_account
     if isinstance(service_account, str) and service_account.strip().startswith("{"):
         try:
@@ -104,24 +92,16 @@ def get_drive_client() -> Optional[DriveClient]:
     try:
         return DriveClient(creds_payload, folder_id)
     except Exception as e:
-        print(f"[Drive] Failed to instantiate DriveClient: {e}")
+        print(f"[Drive] DriveClient init notice: {e}")
         return None
 
 
 def fetch_csv(drive: Optional[DriveClient], filename: str) -> pd.DataFrame:
-    """Loads CSV from local filesystem paths or via DriveClient."""
-    local_candidates = [
-        filename,
-        os.path.join(REPO_ROOT, filename),
-        os.path.join(GARMIN_DIR, filename),
-        os.path.join(WITHINGS_DIR, filename),
-    ]
-    for path in local_candidates:
+    for path in [filename, os.path.join(REPO_ROOT, filename), os.path.join(GARMIN_DIR, filename), os.path.join(WITHINGS_DIR, filename)]:
         if os.path.exists(path):
-            print(f"[Dataset] Loaded local file: {path}")
+            print(f"[Local] Loaded {path}")
             return pd.read_csv(path)
 
-    # Attempt fetching using DriveClient methods if available
     if drive:
         for method_name in ["download_file_content", "download_csv", "get_file_content", "download_file"]:
             if hasattr(drive, method_name):
@@ -134,14 +114,11 @@ def fetch_csv(drive: Optional[DriveClient], filename: str) -> pd.DataFrame:
                     elif isinstance(result, bytes):
                         return pd.read_csv(io.BytesIO(result))
                 except Exception as e:
-                    print(f"[Drive] Method {method_name} failed for {filename}: {e}")
+                    print(f"[Drive] Could not download {filename} via {method_name}: {e}")
 
     return pd.DataFrame()
 
 
-# ==========================================
-# Main Processing Pipeline
-# ==========================================
 def build_quantified_self_dataset() -> None:
     drive = get_drive_client()
 
@@ -149,11 +126,8 @@ def build_quantified_self_dataset() -> None:
     withings_df = fetch_csv(drive, WITHINGS_FILENAME)
 
     if garmin_df.empty and withings_df.empty:
-        raise ValueError(
-            f"Could not load '{GARMIN_FILENAME}' or '{WITHINGS_FILENAME}' locally or from Google Drive."
-        )
+        raise ValueError(f"Could not load '{GARMIN_FILENAME}' or '{WITHINGS_FILENAME}' locally or from Google Drive.")
 
-    # Standardize date column names
     for df_source in [garmin_df, withings_df]:
         if not df_source.empty:
             date_col = next(
@@ -162,7 +136,6 @@ def build_quantified_self_dataset() -> None:
             )
             df_source["Date_YYYY_MM_DD"] = pd.to_datetime(df_source[date_col]).dt.strftime("%Y-%m-%d")
 
-    # Full outer merge on calendar date
     if not garmin_df.empty and not withings_df.empty:
         merged = pd.merge(garmin_df, withings_df, on="Date_YYYY_MM_DD", how="outer")
     elif not garmin_df.empty:
@@ -173,7 +146,6 @@ def build_quantified_self_dataset() -> None:
     merged["Date_YYYY_MM_DD"] = pd.to_datetime(merged["Date_YYYY_MM_DD"])
     merged = merged.sort_values("Date_YYYY_MM_DD").reset_index(drop=True)
 
-    # Reindex across a complete daily calendar range (1 row = 1 calendar day)
     full_dates = pd.date_range(
         start=merged["Date_YYYY_MM_DD"].min(),
         end=merged["Date_YYYY_MM_DD"].max(),
@@ -194,7 +166,6 @@ def build_quantified_self_dataset() -> None:
                     return df[col]
         return pd.Series(default_val, index=df.index)
 
-    # Raw pass-through mappings
     df["Daily_Running_Distance_km"] = pd.to_numeric(
         get_source_series(["Daily_Running_Distance_km", "running_distance_km", "running_distance", "run_distance"]),
         errors="coerce",
@@ -272,7 +243,7 @@ def build_quantified_self_dataset() -> None:
         errors="coerce",
     )
 
-    # Tier 1 Derived Metrics (Full Historical Dataset)
+    # 1. Tier 1 Derived Metrics (Full Timeline)
     df["Running_Distance_28d_Total_km"] = (
         df["Daily_Running_Distance_km"].rolling(window=28, min_periods=1).sum().round(2)
     )
@@ -286,7 +257,7 @@ def build_quantified_self_dataset() -> None:
         raw_body_fat.rolling(window=7, min_periods=1).mean().round(1)
     )
 
-    # Tier 2 Non-Overlapping Baseline HRV Z-Score
+    # 2. Tier 2 Non-Overlapping Baseline HRV Z-Score
     shifted_hrv = df["Overnight_HRV_RMSSD_ms"].shift(7)
     baseline_60d_mean = shifted_hrv.rolling(window=60, min_periods=30).mean()
     baseline_60d_std = shifted_hrv.rolling(window=60, min_periods=30).std().replace(0, np.nan)
@@ -295,7 +266,7 @@ def build_quantified_self_dataset() -> None:
         (df["HRV_RMSSD_7d_Average_ms"] - baseline_60d_mean) / baseline_60d_std
     ).round(2)
 
-    # Output Schema Ordering & 730-Day Export Slicing
+    # 3. Output Schema Ordering & 730-Day Export Slicing
     output_schema = [
         "Date_YYYY_MM_DD",
         "Daily_Running_Distance_km",
@@ -341,6 +312,7 @@ def build_quantified_self_dataset() -> None:
 
     export_df = df[output_schema].tail(DAYS_TO_EXPORT).copy()
 
+    # 4. Row 1 Comment Header & Export
     header_string = f"# Context: Male, Age: {AGE}, Height: {HEIGHT_CM} cm, Max HR: {MAX_HR} bpm\n"
     csv_body = export_df.to_csv(index=False, na_rep="")
 
@@ -358,7 +330,7 @@ def build_quantified_self_dataset() -> None:
                 except Exception as e:
                     print(f"[Drive] Upload via {upload_method} failed: {e}")
 
-    print(f"Successfully generated {OUTPUT_FILE} ({len(export_df)} daily rows).")
+    print(f"Successfully generated {OUTPUT_FILE} ({len(export_df)} rows).")
 
 
 if __name__ == "__main__":
