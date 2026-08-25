@@ -1,14 +1,26 @@
 import fs from 'fs';
 import axios from 'axios';
+import { google } from 'googleapis';
 import { config } from './config.js';
+
+export function getDriveClient() {
+  let auth;
+  if (fs.existsSync(config.serviceAccountJson)) {
+    auth = new google.auth.GoogleAuth({
+      keyFile: config.serviceAccountJson,
+      scopes: ['https://www.googleapis.com/auth/drive']
+    });
+  } else {
+    auth = new google.auth.GoogleAuth({
+      credentials: JSON.parse(config.serviceAccountJson),
+      scopes: ['https://www.googleapis.com/auth/drive']
+    });
+  }
+  return google.drive({ version: 'v3', auth });
+}
 
 export async function getAccessToken() {
   let refreshToken = config.refreshToken;
-
-  if (fs.existsSync(config.tokenFile)) {
-    const saved = JSON.parse(fs.readFileSync(config.tokenFile, 'utf8'));
-    refreshToken = saved.refresh_token || refreshToken;
-  }
 
   const params = new URLSearchParams({
     action: 'requesttoken',
@@ -24,7 +36,6 @@ export async function getAccessToken() {
     throw new Error(`Withings Token Refresh Error: ${JSON.stringify(response.data)}`);
   }
 
-  fs.writeFileSync(config.tokenFile, JSON.stringify(response.data.body, null, 2));
   return response.data.body.access_token;
 }
 
