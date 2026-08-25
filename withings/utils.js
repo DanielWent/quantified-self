@@ -4,6 +4,10 @@ import { google } from 'googleapis';
 import { config } from './config.js';
 
 export function getDriveClient() {
+  if (!config.serviceAccountJson) {
+    throw new Error('GOOGLE_SERVICE_ACCOUNT_JSON is not configured.');
+  }
+
   let auth;
   if (fs.existsSync(config.serviceAccountJson)) {
     auth = new google.auth.GoogleAuth({
@@ -20,14 +24,12 @@ export function getDriveClient() {
 }
 
 export async function getAccessToken() {
-  let refreshToken = config.refreshToken;
-
   const params = new URLSearchParams({
     action: 'requesttoken',
     grant_type: 'refresh_token',
     client_id: config.clientId,
     client_secret: config.clientSecret,
-    refresh_token: refreshToken
+    refresh_token: config.refreshToken
   });
 
   const response = await axios.post('https://wbsapi.withings.net/v2/oauth2', params);
@@ -40,9 +42,7 @@ export async function getAccessToken() {
 }
 
 export function decodeMeasurements(measuregrps) {
-  const records = [];
-
-  for (const group of measuregrps) {
+  return measuregrps.map(group => {
     const timestamp = new Date(group.date * 1000).toISOString();
     const row = {
       timestamp,
@@ -56,8 +56,6 @@ export function decodeMeasurements(measuregrps) {
         row[typeName] = parseFloat((measure.value * Math.pow(10, measure.unit)).toFixed(3));
       }
     }
-    records.push(row);
-  }
-
-  return records;
+    return row;
+  });
 }
