@@ -14,6 +14,8 @@ def sync_to_drive(drive_client: DriveClient, filename: str, new_df: pd.DataFrame
     if file_id:
         existing_stream = drive_client.download_csv(file_id)
         existing_df = pd.read_csv(existing_stream)
+        
+        # Merge new records into existing dataframe, updating rows that changed
         combined_df = pd.concat([existing_df, new_df], ignore_index=True)
         combined_df.drop_duplicates(subset=[key], keep="last", inplace=True)
         combined_df.sort_values(by=key, ascending=True, inplace=True)
@@ -22,7 +24,7 @@ def sync_to_drive(drive_client: DriveClient, filename: str, new_df: pd.DataFrame
 
     csv_content = combined_df.to_csv(index=False)
     drive_client.upload_or_update_csv(filename, csv_content)
-    print(f"Updated {filename} on Google Drive.")
+    print(f"Updated {filename} on Google Drive ({len(combined_df)} total rows).")
 
 def main(days_back: int = 7):
     service_account_json = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON")
@@ -35,6 +37,7 @@ def main(days_back: int = 7):
     end_date = datetime.now().date()
     start_date = end_date - timedelta(days=days_back)
 
+    # 1. Fetch and merge Daily Health Summaries
     daily_rows = []
     curr_date = start_date
     while curr_date <= end_date:
@@ -51,8 +54,10 @@ def main(days_back: int = 7):
     if daily_rows:
         sync_to_drive(drive, "garmin_daily_summary.csv", pd.DataFrame(daily_rows), key="date")
 
+    # 2. Fetch and merge Activities
     try:
-        activities = client.get_activities(start_date.strftime("%Y-%m-%d"), limit=50)
+        activity_limit = max(50, days_back * 4)
+        activities = client.get_activities(limit=activity_limit)
         parsed_activities = [parse_activity(a) for a in activities]
         if parsed_activities:
             sync_to_drive(drive, "garmin_activities.csv", pd.DataFrame(parsed_activities), key="activity_id")
@@ -61,6 +66,6 @@ def main(days_back: int = 7):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--days", type=int, default=7, help="Days to fetch backwards")
+    parser.add_argument("--days", type=int, default=7, help="Days of history to fetch")
     args = parser.parse_args()
     main(days_back=args.days)
