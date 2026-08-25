@@ -25,7 +25,7 @@ class GarminClient:
                 garth.resume(self.tokenstore)
                 self.client = Garmin()
                 self.client.login()
-                logger.info("Successfully resumed Garmin session.")
+                logger.info("Successfully resumed session.")
                 return
 
             if self.email and self.password:
@@ -43,14 +43,70 @@ class GarminClient:
             logger.error(f"Garmin authentication failed: {e}")
             raise
 
-    def get_user_summary(self, date_str: str) -> Dict[str, Any]:
-        return self.client.get_user_summary(date_str)
+    def get_user_summary(self, date_str: str) -> Optional[Dict[str, Any]]:
+        try:
+            return self.client.get_user_summary(date_str)
+        except Exception as e:
+            logger.warning(f"Could not fetch user summary for {date_str}: {e}")
+            return None
 
-    def get_sleep_data(self, date_str: str) -> Dict[str, Any]:
-        return self.client.get_sleep_data(date_str)
+    def get_sleep_data(self, date_str: str) -> Optional[Dict[str, Any]]:
+        try:
+            return self.client.get_sleep_data(date_str)
+        except Exception as e:
+            logger.warning(f"Could not fetch sleep data for {date_str}: {e}")
+            return None
 
-    def get_hrv_data(self, date_str: str) -> Dict[str, Any]:
-        return self.client.get_hrv_data(date_str)
+    def get_hrv_data(self, date_str: str) -> Optional[Dict[str, Any]]:
+        try:
+            return self.client.get_hrv_data(date_str)
+        except Exception as e:
+            logger.warning(f"Could not fetch HRV data for {date_str}: {e}")
+            return None
+
+    def get_body_battery(self, date_str: str) -> Optional[List[Dict[str, Any]]]:
+        try:
+            return self.client.get_body_battery(date_str)
+        except Exception as e:
+            logger.warning(f"Could not fetch body battery for {date_str}: {e}")
+            return None
+
+    def get_training_readiness(self, date_str: str) -> Optional[Dict[str, Any]]:
+        try:
+            return self.client.get_training_readiness(date_str)
+        except Exception as e:
+            logger.warning(f"Could not fetch training readiness for {date_str}: {e}")
+            return None
+
+    def get_respiration_data(self, date_str: str) -> Optional[Dict[str, Any]]:
+        try:
+            return self.client.get_respiration_data(date_str)
+        except Exception as e:
+            logger.warning(f"Could not fetch respiration data for {date_str}: {e}")
+            return None
+
+    def get_spo2_data(self, date_str: str) -> Optional[Dict[str, Any]]:
+        try:
+            return self.client.get_spo2_data(date_str)
+        except Exception as e:
+            logger.warning(f"Could not fetch SpO2 data for {date_str}: {e}")
+            return None
+
+    def get_max_metrics(self, date_str: str) -> Any:
+        try:
+            return self.client.get_max_metrics(date_str)
+        except Exception:
+            return None
+
+    def get_training_status(self, date_str: str) -> Any:
+        try:
+            return self.client.get_training_status(date_str)
+        except Exception:
+            return None
 
     def get_activities(self, start: int = 0, limit: int = 50) -> List[Dict[str, Any]]:
-        return self.client.get_activities(start, limit)
+        try:
+            return self.client.get_activities(start, limit)
+        except Exception as e:
+            logger.error(f"Could not fetch activities: {e}")
+            return []
