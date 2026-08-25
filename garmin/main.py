@@ -20,10 +20,17 @@ def sync_dataframe_to_drive(drive_client: DriveClient, filename: str, new_df: pd
     file_id = drive_client.find_file(filename)
     if file_id:
         existing_stream = drive_client.download_csv(file_id)
-        existing_df = pd.read_csv(existing_stream)
-        combined_df = pd.concat([existing_df, new_df], ignore_index=True)
-        combined_df.drop_duplicates(subset=[key], keep="last", inplace=True)
-        combined_df.sort_values(by=key, ascending=True, inplace=True)
+        try:
+            existing_df = pd.read_csv(existing_stream)
+            if not existing_df.empty:
+                combined_df = pd.concat([existing_df, new_df], ignore_index=True)
+                combined_df.drop_duplicates(subset=[key], keep="last", inplace=True)
+                combined_df.sort_values(by=key, ascending=True, inplace=True)
+            else:
+                combined_df = new_df
+        except pd.errors.EmptyDataError:
+            # File exists on Google Drive but has no data or columns yet
+            combined_df = new_df
     else:
         combined_df = new_df
 
