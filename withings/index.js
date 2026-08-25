@@ -1,8 +1,7 @@
-import fs from 'fs';
-import path from 'path';
+import { Readable } from 'stream';
 import axios from 'axios';
 import { config } from './config.js';
-import { getAccessToken, decodeMeasurements } from './utils.js';
+import { getDriveClient, getAccessToken, decodeMeasurements } from './utils.js';
 
 async function fetchWithingsData(lastUpdate = 0) {
   const token = await getAccessToken();
@@ -22,46 +21,59 @@ async function fetchWithingsData(lastUpdate = 0) {
   return decodeMeasurements(response.data.body.measuregrps || []);
 }
 
-function updateCSV(newRecords, filePath) {
-  const absolutePath = path.resolve(filePath);
-  fs.mkdirSync(path.dirname(absolutePath), { recursive: true });
+async function getExistingDriveCSV(drive, filename, folderId) {
+  const query = `name = '${filename}' and '${folderId}' in parents and trashed = false`;
+  const res = await drive.files.list({ q: query, fields: 'files(id, name)' });
+  if (!res.data.files.length) return { fileId: null, rows: [] };
 
-  let existing = [];
-  const headers = ['timestamp', 'date', 'grpid', 'weight_kg', 'fat_ratio_pct', 'fat_mass_kg', 'muscle_mass_kg', 'hydration_kg', 'bone_mass_kg', 'pulse_wave_velocity_mps', 'vascular_age'];
+  const fileId = res.data.files[0].id;
+  const fileData = await drive.files.get({ fileId, alt: 'media' }, { responseType: 'text' });
+  const lines = fileData.data.trim().split('\n');
+  const headers = lines[0].split(',');
+  const rows = lines.slice(1).map(line => {
+    const vals = line.split(',');
+    return headers.reduce((acc, h, i) => { acc[h] = vals[i]; return acc; }, {});
+  });
+  return { fileId, rows };
+}
 
-  if (fs.existsSync(absolutePath)) {
-    const content = fs.readFileSync(absolutePath, 'utf8').trim().split('\n');
-    const existingHeaders = content[0].split(',');
-    existing = content.slice(1).map(line => {
-      const vals = line.split(',');
-      return existingHeaders.reduce((acc, h, i) => {
-        acc[h] = vals[i];
-        return acc;
-      }, {});
+async function uploadCSVToDrive(drive, filename, folderId, fileId, csvContent) {
+  const media = {
+    mimeType: 'text/csv',
+    body: Readable.from([csvContent])
+  };
+
+  if (fileId) {
+    await drive.files.update({ fileId, media });
+  } else {
+    await drive.files.create({
+      resource: { name: filename, parents: [folderId] },
+      media,
+      fields: 'id'
     });
   }
-
-  const mergedMap = new Map();
-  existing.forEach(r => mergedMap.set(String(r.grpid), r));
-  newRecords.forEach(r => mergedMap.set(String(r.grpid), r));
-
-  const sortedRows = Array.from(mergedMap.values()).sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-
-  const csvContent = [
-    headers.join(','),
-    ...sortedRows.map(row => headers.map(h => row[h] !== undefined ? row[h] : '').join(','))
-  ].join('\n');
-
-  fs.writeFileSync(absolutePath, csvContent, 'utf8');
 }
 
 async function main() {
   try {
+    const drive = getDriveClient();
     const records = await fetchWithingsData(0);
-    if (records.length > 0) {
-      updateCSV(records, config.outputCsv);
-      console.log(`Successfully synced ${records.length} Withings entries.`);
-    }
+
+    const { fileId, rows: existingRows } = await getExistingDriveCSV(drive, config.outputFileName, config.folderId);
+    const headers = ['timestamp', 'date', 'grpid', 'weight_kg', 'fat_ratio_pct', 'fat_mass_kg', 'muscle_mass_kg', 'hydration_kg', 'bone_mass_kg', 'pulse_wave_velocity_mps', 'vascular_age'];
+
+    const recordMap = new Map();
+    existingRows.forEach(r => recordMap.set(String(r.grpid), r));
+    records.forEach(r => recordMap.set(String(r.grpid), r));
+
+    const sortedRows = Array.from(recordMap.values()).sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+    const csvContent = [
+      headers.join(','),
+      ...sortedRows.map(row => headers.map(h => row[h] !== undefined ? row[h] : '').join(','))
+    ].join('\n');
+
+    await uploadCSVToDrive(drive, config.outputFileName, config.folderId, fileId, csvContent);
+    console.log(`Withings sync complete. Uploaded ${sortedRows.length} rows to Google Drive.`);
   } catch (err) {
     console.error('Error running Withings sync:', err);
     process.exit(1);
