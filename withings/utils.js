@@ -24,15 +24,32 @@ export function getDriveClient() {
 }
 
 export async function getAccessToken() {
+  if (!config.clientId || !config.clientSecret || !config.refreshToken) {
+    throw new Error(
+      `Missing Withings credentials:\n` +
+      `- WITHINGS_CLIENT_ID: ${config.clientId ? 'Present' : 'MISSING'}\n` +
+      `- WITHINGS_CLIENT_SECRET: ${config.clientSecret ? 'Present' : 'MISSING'}\n` +
+      `- WITHINGS_REFRESH_TOKEN: ${config.refreshToken ? 'Present' : 'MISSING'}`
+    );
+  }
+
   const params = new URLSearchParams({
     action: 'requesttoken',
     grant_type: 'refresh_token',
-    client_id: config.clientId,
-    client_secret: config.clientSecret,
-    refresh_token: config.refreshToken
+    client_id: config.clientId.trim(),
+    client_secret: config.clientSecret.trim(),
+    refresh_token: config.refreshToken.trim()
   });
 
-  const response = await axios.post('https://wbsapi.withings.net/v2/oauth2', params);
+  const response = await axios.post(
+    'https://wbsapi.withings.net/v2/oauth2',
+    params.toString(),
+    {
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded'
+      }
+    }
+  );
 
   if (response.data.status !== 0) {
     throw new Error(`Withings Token Refresh Error: ${JSON.stringify(response.data)}`);
