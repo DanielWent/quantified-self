@@ -6,11 +6,19 @@ from typing import Optional, Union
 import numpy as np
 import pandas as pd
 
-# Add repo root to path to access garmin modules
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+# ==========================================
+# Path Configuration for Submodule Imports
+# ==========================================
+REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
+GARMIN_DIR = os.path.join(REPO_ROOT, "garmin")
+WITHINGS_DIR = os.path.join(REPO_ROOT, "withings")
 
-from garmin.drive_client import DriveClient
-import garmin.config as garmin_cfg
+for path in [GARMIN_DIR, WITHINGS_DIR, REPO_ROOT]:
+    if path not in sys.path:
+        sys.path.insert(0, path)
+
+from drive_client import DriveClient
+import config as garmin_cfg
 
 # ==========================================
 # Configurable Demographic & Export Settings
@@ -22,11 +30,13 @@ MAX_HR: int = 185
 OUTPUT_FILE: str = "quantified_self_data.csv"
 DAYS_TO_EXPORT: int = 730
 
-# Exact master file names from your existing repository config
 GARMIN_FILENAME: str = getattr(garmin_cfg, "CSV_FILENAME", "garmin_data.csv")
 WITHINGS_FILENAME: str = "withings_data.csv"
 
 
+# ==========================================
+# Parsing & Formatting Utilities
+# ==========================================
 def parse_pace_to_decimal(pace_val: Union[str, float, int, None]) -> Optional[float]:
     """Converts MM:SS or numeric pace representation to decimal minutes (e.g., 04:30 -> 4.5)."""
     if pd.isna(pace_val) or pace_val == "" or pace_val is None:
@@ -62,19 +72,28 @@ def parse_time_to_hh_mm(time_val: Union[str, pd.Timestamp, None]) -> Optional[st
 
 
 def fetch_csv(drive: DriveClient, filename: str) -> pd.DataFrame:
-    """Fetches CSV using existing DriveClient methods or local disk."""
-    # Check local filesystem
-    for path in [filename, os.path.join("garmin", filename), os.path.join("withings", filename)]:
+    """Loads CSV from local paths or downloads directly from Google Drive."""
+    local_candidates = [
+        filename,
+        os.path.join(REPO_ROOT, filename),
+        os.path.join(GARMIN_DIR, filename),
+        os.path.join(WITHINGS_DIR, filename),
+    ]
+    for path in local_candidates:
         if os.path.exists(path):
             return pd.read_csv(path)
 
-    # Fetch from Google Drive using existing repo client
-    try:
-        content = drive.download_file_content(filename) if hasattr(drive, "download_file_content") else None
-        if content:
-            return pd.read_csv(io.BytesIO(content.encode("utf-8") if isinstance(content, str) else content))
-    except Exception as e:
-        print(f"Notice: Could not fetch {filename} via DriveClient download: {e}")
+    # Attempt fetching using DriveClient download methods
+    for method_name in ["download_file_content", "download_csv", "get_file_content"]:
+        if hasattr(drive, method_name):
+            try:
+                content = getattr(drive, method_name)(filename)
+                if content:
+                    if isinstance(content, str):
+                        return pd.read_csv(io.StringIO(content))
+                    return pd.read_csv(io.BytesIO(content))
+            except Exception as e:
+                print(f"Notice: Could not download {filename} via DriveClient.{method_name}: {e}")
 
     return pd.DataFrame()
 
@@ -86,9 +105,9 @@ def build_quantified_self_dataset() -> None:
     withings_df = fetch_csv(drive, WITHINGS_FILENAME)
 
     if garmin_df.empty and withings_df.empty:
-        raise ValueError(f"Could not load '{GARMIN_FILENAME}' or '{WITHINGS_FILENAME}'.")
+        raise ValueError(f"Could not load '{GARMIN_FILENAME}' or '{WITHINGS_FILENAME}' locally or from Google Drive.")
 
-    # Standardize date column
+    # Standardize date column names
     for df_source in [garmin_df, withings_df]:
         if not df_source.empty:
             date_col = next(
@@ -97,7 +116,7 @@ def build_quantified_self_dataset() -> None:
             )
             df_source["Date_YYYY_MM_DD"] = pd.to_datetime(df_source[date_col]).dt.strftime("%Y-%m-%d")
 
-    # Merge on full calendar timeline
+    # Full outer merge on calendar date
     if not garmin_df.empty and not withings_df.empty:
         merged = pd.merge(garmin_df, withings_df, on="Date_YYYY_MM_DD", how="outer")
     elif not garmin_df.empty:
@@ -108,14 +127,15 @@ def build_quantified_self_dataset() -> None:
     merged["Date_YYYY_MM_DD"] = pd.to_datetime(merged["Date_YYYY_MM_DD"])
     merged = merged.sort_values("Date_YYYY_MM_DD").reset_index(drop=True)
 
-    full_date_range = pd.date_range(
+    # 1 row = 1 calendar day across the complete historical timeline
+    full_dates = pd.date_range(
         start=merged["Date_YYYY_MM_DD"].min(),
         end=merged["Date_YYYY_MM_DD"].max(),
         freq="D",
     )
     df = (
         merged.set_index("Date_YYYY_MM_DD")
-        .reindex(full_date_range)
+        .reindex(full_dates)
         .rename_axis("Date_YYYY_MM_DD")
         .reset_index()
     )
@@ -128,7 +148,7 @@ def build_quantified_self_dataset() -> None:
                     return df[col]
         return pd.Series(default_val, index=df.index)
 
-    # Pass-through column mapping
+    # Raw pass-through mapping
     df["Daily_Running_Distance_km"] = pd.to_numeric(
         get_source_series(["Daily_Running_Distance_km", "running_distance_km", "running_distance", "run_distance"]),
         errors="coerce",
@@ -206,7 +226,7 @@ def build_quantified_self_dataset() -> None:
         errors="coerce",
     )
 
-    # Derived Tier 1 Metrics
+    # Tier 1 Derived Metrics (Full Historical Dataset)
     df["Running_Distance_28d_Total_km"] = (
         df["Daily_Running_Distance_km"].rolling(window=28, min_periods=1).sum().round(2)
     )
@@ -220,7 +240,7 @@ def build_quantified_self_dataset() -> None:
         raw_body_fat.rolling(window=7, min_periods=1).mean().round(1)
     )
 
-    # Derived Tier 2 Non-Overlapping Z-Score
+    # Tier 2 Non-Overlapping Baseline HRV Z-Score
     shifted_hrv = df["Overnight_HRV_RMSSD_ms"].shift(7)
     baseline_60d_mean = shifted_hrv.rolling(window=60, min_periods=30).mean()
     baseline_60d_std = shifted_hrv.rolling(window=60, min_periods=30).std().replace(0, np.nan)
@@ -229,7 +249,7 @@ def build_quantified_self_dataset() -> None:
         (df["HRV_RMSSD_7d_Average_ms"] - baseline_60d_mean) / baseline_60d_std
     ).round(2)
 
-    # Output schema & 730-day export slice
+    # 24 Required Schema Columns
     output_schema = [
         "Date_YYYY_MM_DD",
         "Daily_Running_Distance_km",
@@ -275,7 +295,6 @@ def build_quantified_self_dataset() -> None:
 
     export_df = df[output_schema].tail(DAYS_TO_EXPORT).copy()
 
-    # Inject line 1 comment
     header_string = f"# Context: Male, Age: {AGE}, Height: {HEIGHT_CM} cm, Max HR: {MAX_HR} bpm\n"
     csv_body = export_df.to_csv(index=False, na_rep="")
 
@@ -283,12 +302,16 @@ def build_quantified_self_dataset() -> None:
         f.write(header_string)
         f.write(csv_body)
 
-    # Upload using repo's existing DriveClient
-    if hasattr(drive, "upload_file"):
-        drive.upload_file(OUTPUT_FILE)
-    elif hasattr(drive, "upload_csv"):
-        drive.upload_csv(OUTPUT_FILE)
-    print(f"Successfully generated and synced {OUTPUT_FILE}.")
+    for upload_method in ["upload_file", "upload_csv", "upload_or_replace_file"]:
+        if hasattr(drive, upload_method):
+            try:
+                getattr(drive, upload_method)(OUTPUT_FILE)
+                print(f"Uploaded {OUTPUT_FILE} to Google Drive using {upload_method}.")
+                break
+            except Exception as e:
+                print(f"Notice: Failed to upload using DriveClient.{upload_method}: {e}")
+
+    print(f"Successfully generated {OUTPUT_FILE} ({len(export_df)} rows).")
 
 
 if __name__ == "__main__":
