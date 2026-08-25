@@ -29,7 +29,6 @@ def sync_dataframe_to_drive(drive_client: DriveClient, filename: str, new_df: pd
             else:
                 combined_df = new_df
         except pd.errors.EmptyDataError:
-            # File exists on Google Drive but has no data or columns yet
             combined_df = new_df
     else:
         combined_df = new_df
@@ -46,7 +45,7 @@ def main(days_back: int = 7) -> None:
     start_date = end_date - timedelta(days=days_back)
     logger.info(f"Syncing Garmin data from {start_date} to {end_date} ({days_back} days)...")
 
-    # 1. Sync daily summaries
+    # 1. Fetch complete daily telemetry
     daily_rows = []
     curr = start_date
     while curr <= end_date:
@@ -55,15 +54,33 @@ def main(days_back: int = 7) -> None:
             summary = garmin.get_user_summary(d_str)
             sleep = garmin.get_sleep_data(d_str)
             hrv = garmin.get_hrv_data(d_str)
-            daily_rows.append(parse_daily_summary(d_str, summary, sleep, hrv))
+            body_battery = garmin.get_body_battery(d_str)
+            readiness = garmin.get_training_readiness(d_str)
+            respiration = garmin.get_respiration_data(d_str)
+            spo2 = garmin.get_spo2_data(d_str)
+            max_metrics = garmin.get_max_metrics(d_str)
+            training_status = garmin.get_training_status(d_str)
+
+            daily_rows.append(parse_daily_summary(
+                date_str=d_str,
+                summary=summary,
+                sleep=sleep,
+                hrv=hrv,
+                body_battery=body_battery,
+                readiness=readiness,
+                respiration=respiration,
+                spo2=spo2,
+                max_metrics=max_metrics,
+                training_status=training_status
+            ))
         except Exception as e:
-            logger.warning(f"Could not fetch metrics for {d_str}: {e}")
+            logger.warning(f"Could not parse daily metrics for {d_str}: {e}")
         curr += timedelta(days=1)
 
     if daily_rows:
         sync_dataframe_to_drive(drive, "garmin_daily_summary.csv", pd.DataFrame(daily_rows), key="date")
 
-    # 2. Sync activities
+    # 2. Fetch all individual workouts/activities
     try:
         activity_limit = max(50, days_back * 4)
         activities = garmin.get_activities(start=0, limit=activity_limit)
