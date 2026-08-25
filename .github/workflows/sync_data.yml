@@ -1,21 +1,16 @@
-name: Daily Health Data Sync
+name: Sync Health Data & Generate Quantified Self Dataset
 
 on:
   schedule:
-    - cron: '0 4 * * *'  # Runs daily at 04:00 UTC (past 7 days)
+    - cron: '0 6 * * *'
   workflow_dispatch:
-    inputs:
-      days:
-        description: 'Number of days of data to sync'
-        required: true
-        default: '7'
-        type: string
 
 jobs:
   sync:
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout Repository
+      - name: Check out repository
         uses: actions/checkout@v4
 
       - name: Set up Python
@@ -24,35 +19,38 @@ jobs:
           python-version: '3.11'
           cache: 'pip'
 
-      - name: Install Python Dependencies
-        run: pip install -r garmin/requirements.txt
-
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
 
-      - name: Install Node Dependencies
-        working-directory: withings
-        run: npm install
-
-      - name: Run Garmin Sync
-        env:
-          GARMIN_EMAIL: ${{ secrets.GARMIN_EMAIL }}
-          GARMIN_PASSWORD: ${{ secrets.GARMIN_PASSWORD }}
-          GARMIN_TOKENS_PATH: ${{ github.workspace }}/.garmin_tokens
-          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
-          GOOGLE_DRIVE_FOLDER_ID: ${{ secrets.GOOGLE_DRIVE_FOLDER_ID }}
+      - name: Install Node Dependencies & Sync Withings
         run: |
-          python garmin/main.py --days ${{ inputs.days || '7' }}
-
-      - name: Run Withings Sync
-        working-directory: withings
+          cd withings
+          npm install
+          node index.js
         env:
           WITHINGS_CLIENT_ID: ${{ secrets.WITHINGS_CLIENT_ID }}
           WITHINGS_CLIENT_SECRET: ${{ secrets.WITHINGS_CLIENT_SECRET }}
           WITHINGS_REFRESH_TOKEN: ${{ secrets.WITHINGS_REFRESH_TOKEN }}
-          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
-          GOOGLE_DRIVE_FOLDER_ID: ${{ secrets.GOOGLE_DRIVE_FOLDER_ID }}
+          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+
+      - name: Install Python Dependencies & Sync Garmin
         run: |
-          node index.js --days ${{ inputs.days || '7' }}
+          pip install -r garmin/requirements.txt
+          python garmin/main.py
+        env:
+          GARMIN_EMAIL: ${{ secrets.GARMIN_EMAIL }}
+          GARMIN_PASSWORD: ${{ secrets.GARMIN_PASSWORD }}
+          GARMIN_TOKEN: ${{ secrets.GARMIN_TOKEN }}
+          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+
+      - name: Generate Quantified Self Dataset
+        run: |
+          python generate_quantified_self.py
+
+      - name: Archive Quantified Self Dataset Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: quantified_self_data
+          path: quantified_self_data.csv
