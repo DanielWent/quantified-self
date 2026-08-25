@@ -1,0 +1,28 @@
+name: Setup Withings Token
+
+on:
+  workflow_dispatch:
+    inputs:
+      auth_code:
+        description: 'Withings Authorization Code'
+        required: true
+
+jobs:
+  get-token:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Exchange Auth Code for Refresh Token
+        env:
+          CLIENT_ID: ${{ secrets.WITHINGS_CLIENT_ID }}
+          CLIENT_SECRET: ${{ secrets.WITHINGS_CLIENT_SECRET }}
+          AUTH_CODE: ${{ github.event.inputs.auth_code }}
+          REDIRECT_URI: "http://localhost:8080/callback"
+        run: |
+          RESPONSE=$(curl -s -X POST https://wbsapi.withings.net/v2/oauth2 \
+            -d "action=requesttoken" \
+            -d "grant_type=authorization_code" \
+            -d "client_id=$CLIENT_ID" \
+            -d "client_secret=$CLIENT_SECRET" \
+            -d "code=$AUTH_CODE" \
+            -d "redirect_uri=$REDIRECT_URI")
+          echo "Response: $RESPONSE"
