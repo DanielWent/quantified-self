@@ -1,21 +1,23 @@
-def parse_daily_summary(date_str: str, summary: dict, sleep: dict, hrv: dict) -> dict:
+from typing import Any, Dict
+
+def parse_daily_summary(date_str: str, summary: Dict[str, Any], sleep: Dict[str, Any], hrv: Dict[str, Any]) -> Dict[str, Any]:
     sleep_dto = sleep.get("dailySleepDTO", {}) if sleep else {}
     hrv_summary = hrv.get("hrvSummary", {}) if hrv else {}
     
     return {
         "date": date_str,
-        "total_steps": summary.get("totalSteps"),
-        "step_goal": summary.get("dailyStepGoal"),
-        "distance_meters": summary.get("totalDistanceMeters"),
-        "active_calories": summary.get("activeKilocalories"),
-        "resting_calories": summary.get("bmrKilocalories"),
-        "resting_hr": summary.get("restingHeartRate"),
-        "min_hr": summary.get("minHeartRate"),
-        "max_hr": summary.get("maxHeartRate"),
-        "avg_stress": summary.get("averageStressLevel"),
-        "vo2_max": summary.get("vo2MaxValue"),
+        "total_steps": summary.get("totalSteps") if summary else None,
+        "step_goal": summary.get("dailyStepGoal") if summary else None,
+        "distance_meters": summary.get("totalDistanceMeters") if summary else None,
+        "active_calories": summary.get("activeKilocalories") if summary else None,
+        "resting_calories": summary.get("bmrKilocalories") if summary else None,
+        "resting_hr": summary.get("restingHeartRate") if summary else None,
+        "min_hr": summary.get("minHeartRate") if summary else None,
+        "max_hr": summary.get("maxHeartRate") if summary else None,
+        "avg_stress": summary.get("averageStressLevel") if summary else None,
+        "vo2_max": summary.get("vo2MaxValue") if summary else None,
         "sleep_duration_seconds": sleep_dto.get("sleepTimeSeconds"),
-        "sleep_score": sleep_dto.get("sleepScores", {}).get("overall", {}).get("value"),
+        "sleep_score": sleep_dto.get("sleepScores", {}).get("overall", {}).get("value") if sleep_dto.get("sleepScores") else None,
         "deep_sleep_seconds": sleep_dto.get("deepSleepSeconds"),
         "light_sleep_seconds": sleep_dto.get("lightSleepSeconds"),
         "rem_sleep_seconds": sleep_dto.get("remSleepSeconds"),
@@ -24,7 +26,7 @@ def parse_daily_summary(date_str: str, summary: dict, sleep: dict, hrv: dict) ->
         "hrv_status": hrv_summary.get("status")
     }
 
-def parse_activity(activity: dict) -> dict:
+def parse_activity(activity: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "activity_id": activity.get("activityId"),
         "activity_name": activity.get("activityName"),
