@@ -3,11 +3,23 @@ import axios from 'axios';
 import { config } from './config.js';
 import { getDriveClient, getAccessToken, decodeMeasurements } from './utils.js';
 
-async function fetchWithingsData(lastUpdate = 0) {
+function getDaysArg() {
+  const daysIndex = process.argv.indexOf('--days');
+  if (daysIndex !== -1 && process.argv[daysIndex + 1]) {
+    const parsed = parseInt(process.argv[daysIndex + 1], 10);
+    return isNaN(parsed) ? 7 : parsed;
+  }
+  return 7;
+}
+
+async function fetchWithingsData(daysBack = 7) {
   const token = await getAccessToken();
+  const startTimestamp = Math.floor(Date.now() / 1000) - (daysBack * 86400);
+
   const params = new URLSearchParams({
     action: 'getmeas',
-    lastupdate: lastUpdate
+    startdate: startTimestamp,
+    category: 1
   });
 
   const response = await axios.post('https://wbsapi.withings.net/measure', params, {
@@ -56,12 +68,14 @@ async function uploadCSVToDrive(drive, filename, folderId, fileId, csvContent) {
 
 async function main() {
   try {
+    const days = getDaysArg();
     const drive = getDriveClient();
-    const records = await fetchWithingsData(0);
+    const records = await fetchWithingsData(days);
 
     const { fileId, rows: existingRows } = await getExistingDriveCSV(drive, config.outputFileName, config.folderId);
     const headers = ['timestamp', 'date', 'grpid', 'weight_kg', 'fat_ratio_pct', 'fat_mass_kg', 'muscle_mass_kg', 'hydration_kg', 'bone_mass_kg', 'pulse_wave_velocity_mps', 'vascular_age'];
 
+    // Map existing rows by group ID and overwrite/add the newly fetched records
     const recordMap = new Map();
     existingRows.forEach(r => recordMap.set(String(r.grpid), r));
     records.forEach(r => recordMap.set(String(r.grpid), r));
@@ -73,7 +87,7 @@ async function main() {
     ].join('\n');
 
     await uploadCSVToDrive(drive, config.outputFileName, config.folderId, fileId, csvContent);
-    console.log(`Withings sync complete. Uploaded ${sortedRows.length} rows to Google Drive.`);
+    console.log(`Withings sync complete for past ${days} days. Total rows on Drive: ${sortedRows.length}`);
   } catch (err) {
     console.error('Error running Withings sync:', err);
     process.exit(1);
