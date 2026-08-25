@@ -4,6 +4,12 @@ on:
   schedule:
     - cron: '0 6 * * *'
   workflow_dispatch:
+    inputs:
+      days:
+        description: 'Number of trailing days to fetch/process'
+        required: false
+        default: '7'
+        type: string
 
 jobs:
   sync:
@@ -35,6 +41,7 @@ jobs:
           WITHINGS_REFRESH_TOKEN: ${{ secrets.WITHINGS_REFRESH_TOKEN }}
           GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
           GOOGLE_DRIVE_FOLDER_ID: ${{ secrets.GOOGLE_DRIVE_FOLDER_ID }}
+          SYNC_DAYS: ${{ github.event.inputs.days || '7' }}
 
       - name: Install Python Dependencies & Sync Garmin
         run: |
@@ -46,6 +53,7 @@ jobs:
           GARMIN_TOKEN: ${{ secrets.GARMIN_TOKEN }}
           GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
           GOOGLE_DRIVE_FOLDER_ID: ${{ secrets.GOOGLE_DRIVE_FOLDER_ID }}
+          SYNC_DAYS: ${{ github.event.inputs.days || '7' }}
 
       - name: Generate & Upload Quantified Self Dataset
         run: |
