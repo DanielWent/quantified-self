@@ -34,6 +34,7 @@ jobs:
           WITHINGS_CLIENT_SECRET: ${{ secrets.WITHINGS_CLIENT_SECRET }}
           WITHINGS_REFRESH_TOKEN: ${{ secrets.WITHINGS_REFRESH_TOKEN }}
           GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+          GOOGLE_DRIVE_FOLDER_ID: ${{ secrets.GOOGLE_DRIVE_FOLDER_ID }}
 
       - name: Install Python Dependencies & Sync Garmin
         run: |
@@ -44,13 +45,11 @@ jobs:
           GARMIN_PASSWORD: ${{ secrets.GARMIN_PASSWORD }}
           GARMIN_TOKEN: ${{ secrets.GARMIN_TOKEN }}
           GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+          GOOGLE_DRIVE_FOLDER_ID: ${{ secrets.GOOGLE_DRIVE_FOLDER_ID }}
 
-      - name: Generate Quantified Self Dataset
+      - name: Generate & Upload Quantified Self Dataset
         run: |
           python generate_quantified_self.py
-
-      - name: Archive Quantified Self Dataset Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: quantified_self_data
-          path: quantified_self_data.csv
+        env:
+          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_CREDENTIALS }}
+          GOOGLE_DRIVE_FOLDER_ID: ${{ secrets.GOOGLE_DRIVE_FOLDER_ID }}
