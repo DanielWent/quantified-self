@@ -4,3 +4,5 @@ __pycache__/
 .env
 .garmin_tokens/
 .withings_tokens.json
+service_account.json
+*.csv
