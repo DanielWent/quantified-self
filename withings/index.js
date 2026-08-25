@@ -27,7 +27,7 @@ async function fetchWithingsData(daysBack = 7) {
   });
 
   if (response.data.status !== 0) {
-    throw new Error(`Failed to fetch measurements: ${JSON.stringify(response.data)}`);
+    throw new Error(`Withings API Error: ${JSON.stringify(response.data)}`);
   }
 
   return decodeMeasurements(response.data.body.measuregrps || []);
@@ -35,12 +35,19 @@ async function fetchWithingsData(daysBack = 7) {
 
 async function getExistingDriveCSV(drive, filename, folderId) {
   const query = `name = '${filename}' and '${folderId}' in parents and trashed = false`;
-  const res = await drive.files.list({ q: query, fields: 'files(id, name)' });
+  const res = await drive.files.list({
+    q: query,
+    fields: 'files(id, name)',
+    supportsAllDrives: true,
+    includeItemsFromAllDrives: true
+  });
   if (!res.data.files.length) return { fileId: null, rows: [] };
 
   const fileId = res.data.files[0].id;
-  const fileData = await drive.files.get({ fileId, alt: 'media' }, { responseType: 'text' });
-  const lines = fileData.data.trim().split('\n');
+  const fileData = await drive.files.get({ fileId, alt: 'media', supportsAllDrives: true }, { responseType: 'text' });
+  const lines = (fileData.data || '').trim().split('\n');
+  if (lines.length <= 1 || !lines[0]) return { fileId, rows: [] };
+
   const headers = lines[0].split(',');
   const rows = lines.slice(1).map(line => {
     const vals = line.split(',');
@@ -56,12 +63,17 @@ async function uploadCSVToDrive(drive, filename, folderId, fileId, csvContent) {
   };
 
   if (fileId) {
-    await drive.files.update({ fileId, media });
+    await drive.files.update({
+      fileId,
+      media,
+      supportsAllDrives: true
+    });
   } else {
     await drive.files.create({
       resource: { name: filename, parents: [folderId] },
       media,
-      fields: 'id'
+      fields: 'id',
+      supportsAllDrives: true
     });
   }
 }
@@ -75,7 +87,6 @@ async function main() {
     const { fileId, rows: existingRows } = await getExistingDriveCSV(drive, config.outputFileName, config.folderId);
     const headers = ['timestamp', 'date', 'grpid', 'weight_kg', 'fat_ratio_pct', 'fat_mass_kg', 'muscle_mass_kg', 'hydration_kg', 'bone_mass_kg', 'pulse_wave_velocity_mps', 'vascular_age'];
 
-    // Map existing rows by group ID and overwrite/add the newly fetched records
     const recordMap = new Map();
     existingRows.forEach(r => recordMap.set(String(r.grpid), r));
     records.forEach(r => recordMap.set(String(r.grpid), r));
@@ -87,9 +98,9 @@ async function main() {
     ].join('\n');
 
     await uploadCSVToDrive(drive, config.outputFileName, config.folderId, fileId, csvContent);
-    console.log(`Withings sync complete for past ${days} days. Total rows on Drive: ${sortedRows.length}`);
+    console.log(`Withings sync complete (${days} days requested). Total rows on Drive: ${sortedRows.length}`);
   } catch (err) {
-    console.error('Error running Withings sync:', err);
+    console.error('Error in Withings sync:', err);
     process.exit(1);
   }
 }
