@@ -92,8 +92,7 @@ async function main() {
     const newDailyRecords = await fetchWithingsData(days);
 
     const { fileId, rows: existingRows } = await getExistingDriveCSV(drive, config.outputFileName, config.folderId);
-    
-    // Canonical Withings columns (one row per date, grpid removed)
+
     const headers = [
       'date',
       'weight_kg',
@@ -112,7 +111,6 @@ async function main() {
       if (row.date) recordMap.set(row.date, row);
     });
 
-    // Merge new consolidated records into the existing history
     newDailyRecords.forEach(record => {
       const existing = recordMap.get(record.date) || {};
       recordMap.set(record.date, { ...existing, ...record });
