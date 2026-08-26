@@ -44,5 +44,35 @@ export function parseWithingsMeasures(measureGroups) {
     }
   }
 
-  return Object.values(dailyRecords).sort((a, b) => a.date.localeCompare(b.date));
+  return Object.values(dailyRecords).sort((a, b) => b.date.localeCompare(a.date));
+}
+
+export function formatWithingsCsv(records) {
+  const headers = [
+    "Date", "Weight (kg)", "Fat Ratio (%)", "Fat Mass (kg)", "Muscle Mass (kg)",
+    "Hydration (kg)", "Bone Mass (kg)", "Pulse Wave Velocity (m/s)",
+    "Visceral Fat", "Vascular Age", "Nerve Health Score"
+  ];
+
+  const rows = [headers.join(",")];
+
+  for (const r of records) {
+    const m = r.measures || {};
+    const row = [
+      r.date || "",
+      m.weight_kg !== undefined ? m.weight_kg.toFixed(2) : "",
+      m.fat_ratio_pct !== undefined ? m.fat_ratio_pct.toFixed(2) : "",
+      m.fat_mass_weight_kg !== undefined ? m.fat_mass_weight_kg.toFixed(2) : "",
+      m.muscle_mass_kg !== undefined ? m.muscle_mass_kg.toFixed(2) : "",
+      m.hydration_kg !== undefined ? m.hydration_kg.toFixed(2) : "",
+      m.bone_mass_kg !== undefined ? m.bone_mass_kg.toFixed(2) : "",
+      m.pulse_wave_velocity_ms !== undefined ? m.pulse_wave_velocity_ms.toFixed(2) : "",
+      m.visceral_fat !== undefined ? m.visceral_fat : "",
+      m.vascular_age !== undefined ? m.vascular_age : "",
+      m.nerve_health_score !== undefined ? m.nerve_health_score : ""
+    ];
+    rows.push(row.join(","));
+  }
+
+  return rows.join("\n");
 }
