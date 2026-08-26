@@ -1,13 +1,11 @@
 {
-  "name": "withings-drive-sync",
+  "name": "quantified-self-withings",
   "version": "1.0.0",
   "type": "module",
-  "scripts": {
-    "sync": "node index.js"
-  },
+  "main": "index.js",
   "dependencies": {
     "axios": "^1.7.0",
     "dotenv": "^16.4.5",
-    "googleapis": "^140.0.0"
+    "googleapis": "^144.0.0"
   }
 }
