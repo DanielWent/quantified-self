@@ -3,37 +3,13 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import config from './config.js';
-import { parseWithingsMeasures } from './utils.js';
-import { initDriveClient, getWithingsTokenFromDrive, saveWithingsTokenToDrive } from './drive.js';
+import { parseWithingsMeasures, formatWithingsCsv } from './utils.js';
+import { initDriveClient, uploadFileToDrive } from './drive.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const tokenFilePath = path.join(__dirname, 'withings_token.json');
 
-async function resolveInitialRefreshToken(drive) {
-  // 1. Try Google Drive
-  const driveToken = await getWithingsTokenFromDrive(drive, config.googleDriveFolderId);
-  if (driveToken) {
-    return driveToken;
-  }
-
-  // 2. Try local cache file
-  if (fs.existsSync(tokenFilePath)) {
-    try {
-      const fileData = JSON.parse(fs.readFileSync(tokenFilePath, 'utf-8'));
-      if (fileData && fileData.refresh_token) {
-        return fileData.refresh_token;
-      }
-    } catch (err) {
-      console.warn('Failed to read local withings_token.json:', err.message);
-    }
-  }
-
-  // 3. Fall back to environment variable
-  return config.refreshToken;
-}
-
-async function getAccessToken(clientId, clientSecret, currentRefreshToken, drive) {
+async function getAccessToken(clientId, clientSecret, currentRefreshToken) {
   const params = new URLSearchParams();
   params.append('action', 'requesttoken');
   params.append('grant_type', 'refresh_token');
@@ -48,23 +24,7 @@ async function getAccessToken(clientId, clientSecret, currentRefreshToken, drive
   });
 
   if (response.data && response.data.status === 0 && response.data.body) {
-    const { access_token, refresh_token } = response.data.body;
-
-    if (refresh_token) {
-      const tokenPayload = {
-        access_token,
-        refresh_token,
-        updated_at: new Date().toISOString()
-      };
-
-      fs.writeFileSync(tokenFilePath, JSON.stringify(tokenPayload, null, 2), 'utf-8');
-
-      if (drive) {
-        await saveWithingsTokenToDrive(drive, config.googleDriveFolderId, tokenPayload);
-      }
-    }
-
-    return access_token;
+    return response.data.body.access_token;
   }
   throw new Error(`Failed to refresh Withings token: ${JSON.stringify(response.data)}`);
 }
@@ -116,31 +76,35 @@ async function run() {
   const days = config.daysToSync;
   console.log(`Starting Withings sync for the past ${days} days...`);
 
-  const drive = initDriveClient(config.googleDriveCredentials);
-  const activeRefreshToken = await resolveInitialRefreshToken(drive);
-
-  if (!config.clientId || !config.clientSecret || !activeRefreshToken) {
-    console.error('Missing Withings credentials or refresh token.');
+  if (!config.clientId || !config.clientSecret || !config.refreshToken) {
+    console.error('Missing Withings credentials or refresh token in environment variables.');
     process.exit(1);
   }
 
   try {
-    const accessToken = await getAccessToken(
-      config.clientId,
-      config.clientSecret,
-      activeRefreshToken,
-      drive
-    );
-
+    const accessToken = await getAccessToken(config.clientId, config.clientSecret, config.refreshToken);
     const endDate = Math.floor(Date.now() / 1000);
     const startDate = endDate - (days * 24 * 60 * 60);
 
     const measureGroups = await fetchAllMeasurements(accessToken, startDate, endDate);
     const parsedData = parseWithingsMeasures(measureGroups);
 
-    const outputPath = path.join(__dirname, 'withings_data.json');
-    fs.writeFileSync(outputPath, JSON.stringify(parsedData, null, 2), 'utf-8');
-    console.log(`Saved ${parsedData.length} records to ${outputPath}`);
+    // Save JSON cache
+    const jsonPath = path.join(__dirname, 'withings_data.json');
+    fs.writeFileSync(jsonPath, JSON.stringify(parsedData, null, 2), 'utf-8');
+    console.log(`Saved ${parsedData.length} records to ${jsonPath}`);
+
+    // Generate withings_measurements.csv
+    const csvPath = path.join(__dirname, 'withings_measurements.csv');
+    const csvContent = formatWithingsCsv(parsedData);
+    fs.writeFileSync(csvPath, csvContent, 'utf-8');
+    console.log(`Saved ${parsedData.length} records to ${csvPath}`);
+
+    // Upload withings_measurements.csv to Google Drive
+    const drive = initDriveClient(config.googleDriveCredentials);
+    if (drive) {
+      await uploadFileToDrive(drive, config.googleDriveFolderId, csvPath);
+    }
   } catch (error) {
     console.error('Error executing Withings sync:', error.message);
     process.exit(1);
