@@ -1,7 +1,15 @@
 import os
+import sys
+import csv
 import json
 import logging
 from datetime import datetime, timedelta
+
+sys.path.append(os.path.join(os.path.dirname(__file__), "garmin"))
+try:
+    from drive_client import DriveClient
+except ImportError:
+    DriveClient = None
 
 logging.basicConfig(
     level=logging.INFO,
@@ -9,83 +17,150 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-def resolve_data_file(filename, subdirs=None):
+def resolve_data_file(filename, search_dirs=None):
     if os.path.exists(filename):
         return filename
-    if subdirs:
-        for subdir in subdirs:
-            candidate = os.path.join(subdir, filename)
+    if search_dirs:
+        for sdir in search_dirs:
+            candidate = os.path.join(sdir, filename)
             if os.path.exists(candidate):
                 return candidate
     return None
 
-def load_json_file(primary_name, subdirs=None):
-    filepath = resolve_data_file(primary_name, subdirs)
-    if filepath and os.path.exists(filepath):
+def load_json_records(filename, search_dirs=None):
+    path = resolve_data_file(filename, search_dirs)
+    if path and os.path.exists(path):
         try:
-            with open(filepath, "r", encoding="utf-8") as f:
+            with open(path, "r", encoding="utf-8") as f:
                 return json.load(f)
         except Exception as e:
-            logger.warning(f"Failed to read {filepath}: {e}")
+            logger.warning(f"Error loading {path}: {e}")
     return []
 
-def calculate_quantified_self():
+def generate_quantified_self():
     try:
-        days_to_sync = int(os.getenv("DAYS_TO_SYNC", 7))
+        days = int(os.getenv("DAYS_TO_SYNC", "730"))
     except (ValueError, TypeError):
-        days_to_sync = 7
+        days = 730
 
-    logger.info(f"Generating Quantified Self aggregation for {days_to_sync} days...")
+    logger.info(f"Generating full Quantified Self spreadsheets for the past {days} days...")
 
-    garmin_records = load_json_file("garmin_data.json", ["garmin", "."])
-    withings_records = load_json_file("withings_data.json", ["withings", "."])
+    garmin_records = load_json_records("garmin_data.json", ["garmin", "."])
+    withings_records = load_json_records("withings_data.json", ["withings", "."])
 
-    cutoff_date = (datetime.now() - timedelta(days=days_to_sync)).date().isoformat()
+    cutoff_date = (datetime.now() - timedelta(days=days)).date().isoformat()
 
-    filtered_garmin = [
-        r for r in garmin_records
+    garmin_by_date = {
+        r.get("date"): r for r in garmin_records
         if isinstance(r, dict) and r.get("date", "") >= cutoff_date
-    ]
-    filtered_withings = [
-        r for r in withings_records
+    }
+    withings_by_date = {
+        r.get("date"): r for r in withings_records
         if isinstance(r, dict) and r.get("date", "") >= cutoff_date
-    ]
-
-    total_steps = sum(r.get("steps", 0) for r in filtered_garmin)
-    sleep_scores = [r.get("sleep_score") for r in filtered_garmin if r.get("sleep_score") is not None]
-    rhr_values = [r.get("resting_heart_rate") for r in filtered_garmin if r.get("resting_heart_rate") is not None]
-    hrv_values = [r.get("hrv_avg") for r in filtered_garmin if r.get("hrv_avg") is not None]
-
-    weights = []
-    fat_ratios = []
-    for r in filtered_withings:
-        measures = r.get("measures", {})
-        if "weight_kg" in measures:
-            weights.append(measures["weight_kg"])
-        if "fat_ratio_pct" in measures:
-            fat_ratios.append(measures["fat_ratio_pct"])
-
-    summary = {
-        "sync_window_days": days_to_sync,
-        "start_date": cutoff_date,
-        "garmin_days_recorded": len(filtered_garmin),
-        "withings_days_recorded": len(filtered_withings),
-        "metrics": {
-            "total_steps": total_steps,
-            "avg_daily_steps": (total_steps / len(filtered_garmin)) if filtered_garmin else 0,
-            "avg_sleep_score": (sum(sleep_scores) / len(sleep_scores)) if sleep_scores else None,
-            "avg_resting_heart_rate": (sum(rhr_values) / len(rhr_values)) if rhr_values else None,
-            "avg_hrv": (sum(hrv_values) / len(hrv_values)) if hrv_values else None,
-            "avg_weight_kg": (sum(weights) / len(weights)) if weights else None,
-            "avg_fat_ratio_pct": (sum(fat_ratios) / len(fat_ratios)) if fat_ratios else None
-        }
     }
 
-    output_path = "quantified_self_summary.json"
-    with open(output_path, "w", encoding="utf-8") as f:
-        json.dump(summary, f, indent=2, ensure_ascii=False)
+    all_dates = sorted(
+        list(set(list(garmin_by_date.keys()) + list(withings_by_date.keys()))),
+        reverse=True
+    )
 
-    logger.info(f"Successfully generated {output_path} with {len(filtered_garmin)} Garmin and {len(filtered_withings)} Withings days processed.")
+    # 1. Daily Metrics Spreadsheet
+    daily_csv = "quantified_self_daily.csv"
+    daily_headers = [
+        "Date", "Steps", "Distance (km)", "VO2 Max", "Resting Heart Rate (bpm)",
+        "HRV Avg (ms)", "Sleep Duration (hours)", "Sleep Score",
+        "Weight (kg)", "Fat Ratio (%)", "Fat Mass (kg)", "Muscle Mass (kg)",
+        "Hydration (kg)", "Bone Mass (kg)", "Pulse Wave Velocity (m/s)",
+        "Visceral Fat", "Vascular Age", "Nerve Health Score"
+    ]
+
+    daily_rows = []
+    for d in all_dates:
+        g = garmin_by_date.get(d, {})
+        w = withings_by_date.get(d, {})
+        wm = w.get("measures", {})
+
+        distance_km = round(g.get("distance_meters", 0.0) / 1000.0, 2) if g.get("distance_meters") else ""
+        sleep_hrs = round(g.get("sleep_duration_seconds", 0) / 3600.0, 2) if g.get("sleep_duration_seconds") else ""
+
+        daily_rows.append([
+            d,
+            g.get("steps", ""),
+            distance_km,
+            g.get("vo2_max", ""),
+            g.get("resting_heart_rate", ""),
+            g.get("hrv_avg", ""),
+            sleep_hrs,
+            g.get("sleep_score", ""),
+            wm.get("weight_kg", ""),
+            wm.get("fat_ratio_pct", ""),
+            wm.get("fat_mass_weight_kg", ""),
+            wm.get("muscle_mass_kg", ""),
+            wm.get("hydration_kg", ""),
+            wm.get("bone_mass_kg", ""),
+            wm.get("pulse_wave_velocity_ms", ""),
+            wm.get("visceral_fat", ""),
+            wm.get("vascular_age", ""),
+            wm.get("nerve_health_score", "")
+        ])
+
+    with open(daily_csv, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(daily_headers)
+        writer.writerows(daily_rows)
+    logger.info(f"Generated {daily_csv} with {len(daily_rows)} rows.")
+
+    # 2. Activities Spreadsheet
+    activities_csv = "quantified_self_activities.csv"
+    activity_headers = [
+        "Activity ID", "Date", "Name", "Type", "Distance (km)",
+        "Duration (mins)", "Average HR (bpm)", "Max HR (bpm)", "Average Pace (min/km)"
+    ]
+
+    activity_rows = []
+    for d in sorted(garmin_by_date.keys(), reverse=True):
+        g = garmin_by_date[d]
+        for act in g.get("activities", []):
+            dist_km = round(act.get("distance_meters", 0.0) / 1000.0, 2) if act.get("distance_meters") else ""
+            dur_mins = round(act.get("duration_seconds", 0.0) / 60.0, 2) if act.get("duration_seconds") else ""
+            
+            speed_ms = act.get("avg_pace_meter_per_sec")
+            pace_str = ""
+            if speed_ms and speed_ms > 0:
+                sec_per_km = 1000.0 / speed_ms
+                pace_mins = int(sec_per_km // 60)
+                pace_secs = int(sec_per_km % 60)
+                pace_str = f"{pace_mins:02d}:{pace_secs:02d}"
+
+            activity_rows.append([
+                act.get("activity_id", ""),
+                d,
+                act.get("name", ""),
+                act.get("type", ""),
+                dist_km,
+                dur_mins,
+                act.get("average_hr", ""),
+                act.get("max_hr", ""),
+                pace_str
+            ])
+
+    with open(activities_csv, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(activity_headers)
+        writer.writerows(activity_rows)
+    logger.info(f"Generated {activities_csv} with {len(activity_rows)} rows.")
+
+    # 3. Google Drive / Sheets Sync
+    drive_creds = os.getenv("GOOGLE_DRIVE_CREDENTIALS")
+    folder_id = os.getenv("GOOGLE_DRIVE_FOLDER_ID")
+    if drive_creds and DriveClient:
+        try:
+            drive_client = DriveClient(drive_creds, folder_id)
+            drive_client.upload_file(daily_csv, folder_id, convert_to_sheets=True)
+            drive_client.upload_file(activities_csv, folder_id, convert_to_sheets=True)
+            logger.info("Synced full datasets to Google Drive / Sheets.")
+        except Exception as e:
+            logger.error(f"Failed Drive upload: {e}")
 
 if __name__ == "__main__":
-    calculate_quantified_self()
+    generate_quantified_self()
