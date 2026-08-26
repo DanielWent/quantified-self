@@ -55,7 +55,7 @@ async function getStoredRefreshToken(drive) {
       }
     }
   } catch (err) {
-    console.warn('Could not read stored Withings token from Drive, falling back to env:', err.message);
+    console.warn('Could not read stored Withings token from Drive, falling back to secret:', err.message);
   }
   return { fileId: null, refreshToken: config.refreshToken ? config.refreshToken.trim() : null };
 }
@@ -78,7 +78,7 @@ async function saveRefreshToken(drive, fileId, newRefreshToken) {
         supportsAllDrives: true
       });
     }
-    console.log('Successfully saved updated Withings refresh token to Google Drive.');
+    console.log('Saved updated Withings refresh token to Google Drive.');
   } catch (err) {
     console.warn('Could not persist updated Withings token to Drive:', err.message);
   }
@@ -86,7 +86,7 @@ async function saveRefreshToken(drive, fileId, newRefreshToken) {
 
 export async function getAccessToken() {
   if (!config.clientId || !config.clientSecret) {
-    throw new Error('Missing WITHINGS_CLIENT_ID or WITHINGS_CLIENT_SECRET in environment variables.');
+    throw new Error('Missing WITHINGS_CLIENT_ID or WITHINGS_CLIENT_SECRET in environment.');
   }
 
   const drive = getDriveClient();
