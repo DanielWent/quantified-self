@@ -25,7 +25,7 @@ class GarminClient:
                 garth.resume(self.tokenstore)
                 self.client = Garmin()
                 self.client.login()
-                logger.info("Successfully resumed session.")
+                logger.info("Successfully resumed Garmin session.")
                 return
 
             if self.email and self.password:
