@@ -31,11 +31,7 @@ def sync_garmin_data(days=DAYS_TO_SYNC):
         except Exception as e:
             logger.warning(f"Failed to initialize Drive client: {e}")
 
-    garmin_client = GarminClient(
-        token_base64=GARMIN_TOKENS,
-        email=GARMIN_EMAIL,
-        password=GARMIN_PASSWORD
-    )
+    garmin_client = GarminClient()
 
     today = datetime.now().date()
     start_date = today - timedelta(days=days)
