@@ -1,75 +1,102 @@
 import os
 import sys
-from datetime import datetime, timedelta
+import json
 import logging
+from datetime import datetime, timedelta
+from config import (
+    GARMIN_TOKENS,
+    GARMIN_EMAIL,
+    GARMIN_PASSWORD,
+    GOOGLE_DRIVE_CREDENTIALS,
+    GOOGLE_DRIVE_FOLDER_ID,
+    DAYS_TO_SYNC
+)
+from garmin_client import GarminClient
+from drive_client import DriveClient
+from parser import parse_garmin_data
 
-CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-if CURRENT_DIR not in sys.path:
-    sys.path.insert(0, CURRENT_DIR)
-
-try:
-    from config import (
-        GARMIN_EMAIL,
-        GARMIN_PASSWORD,
-        GARMIN_TOKEN,
-        GOOGLE_SHEETS_CREDENTIALS,
-        GOOGLE_SPREADSHEET_KEY,
-        DAYS_TO_SYNC,
-    )
-    from garmin_client import GarminClient
-    from drive_client import DriveClient
-    from parser import parse_daily_summary
-except ImportError:
-    from garmin.config import (
-        GARMIN_EMAIL,
-        GARMIN_PASSWORD,
-        GARMIN_TOKEN,
-        GOOGLE_SHEETS_CREDENTIALS,
-        GOOGLE_SPREADSHEET_KEY,
-        DAYS_TO_SYNC,
-    )
-    from garmin.garmin_client import GarminClient
-    from garmin.drive_client import DriveClient
-    from garmin.parser import parse_daily_summary
-
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s"
+)
 logger = logging.getLogger(__name__)
 
-def sync_garmin_data(days: int = None):
-    sync_days = days if days is not None else DAYS_TO_SYNC
-    logger.info(f"Starting Garmin sync for the past {sync_days} days...")
+def sync_garmin_data(days=DAYS_TO_SYNC):
+    logger.info(f"Starting Garmin sync for the past {days} days...")
+    
+    drive_client = None
+    if GOOGLE_DRIVE_CREDENTIALS:
+        try:
+            drive_client = DriveClient(GOOGLE_DRIVE_CREDENTIALS, GOOGLE_DRIVE_FOLDER_ID)
+        except Exception as e:
+            logger.warning(f"Failed to initialize Drive client: {e}")
 
-    garmin_client = GarminClient()
-    garmin_client.authenticate()
-
-    drive_client = DriveClient()
-    worksheet = drive_client.get_worksheet("Garmin")
-    existing_records = drive_client.get_existing_dates(worksheet)
+    garmin_client = GarminClient(
+        token_base64=GARMIN_TOKENS,
+        email=GARMIN_EMAIL,
+        password=GARMIN_PASSWORD
+    )
 
     today = datetime.now().date()
-    rows_to_update = []
+    start_date = today - timedelta(days=days)
+    
+    activities = []
+    try:
+        activities = garmin_client.get_activities(start_date.isoformat(), today.isoformat()) or []
+    except Exception as e:
+        logger.warning(f"Error fetching activities: {e}")
 
-    for i in range(sync_days):
-        target_date = today - timedelta(days=i)
-        date_str = target_date.strftime("%Y-%m-%d")
-
+    all_data = []
+    for i in range(days):
+        current_date = today - timedelta(days=i)
+        date_str = current_date.isoformat()
         try:
-            raw_stats = garmin_client.get_stats_for_date(date_str)
-            parsed_data = parse_daily_summary(date_str, raw_stats)
-            if parsed_data:
-                rows_to_update.append(parsed_data)
-        except Exception as e:
-            logger.warning(f"Could not retrieve Garmin data for {date_str}: {e}")
+            stats = None
+            sleep = None
+            rhr = None
+            hrv = None
 
-    if rows_to_update:
-        drive_client.upsert_rows(worksheet, rows_to_update, existing_records)
-        logger.info(f"Successfully processed {len(rows_to_update)} Garmin records.")
-    else:
-        logger.warning("No Garmin data retrieved to update.")
+            try:
+                stats = garmin_client.get_stats(date_str)
+            except Exception as e:
+                logger.debug(f"Stats unavailable for {date_str}: {e}")
+
+            try:
+                sleep = garmin_client.get_sleep_data(date_str)
+            except Exception as e:
+                logger.debug(f"Sleep data unavailable for {date_str}: {e}")
+
+            try:
+                rhr = garmin_client.get_rhr_data(date_str)
+            except Exception as e:
+                logger.debug(f"RHR data unavailable for {date_str}: {e}")
+
+            try:
+                hrv = garmin_client.get_hrv_data(date_str)
+            except Exception as e:
+                logger.debug(f"HRV data unavailable for {date_str}: {e}")
+
+            day_data = parse_garmin_data(date_str, stats, sleep, rhr, hrv, activities)
+            all_data.append(day_data)
+        except Exception as e:
+            logger.warning(f"Error processing Garmin data for {date_str}: {e}")
+            continue
+
+    output_filename = "garmin_data.json"
+    with open(output_filename, "w", encoding="utf-8") as f:
+        json.dump(all_data, f, indent=2, ensure_ascii=False)
+    logger.info(f"Saved {len(all_data)} records to {output_filename}")
+
+    if drive_client:
+        try:
+            drive_client.upload_file(output_filename, GOOGLE_DRIVE_FOLDER_ID)
+            logger.info(f"Uploaded {output_filename} to Google Drive")
+        except Exception as e:
+            logger.error(f"Failed to upload {output_filename} to Drive: {e}")
 
 if __name__ == "__main__":
-    if len(sys.argv) > 1 and sys.argv[1].isdigit():
-        days_input = int(sys.argv[1])
-    else:
+    try:
+        days_input = int(os.getenv("DAYS_TO_SYNC", DAYS_TO_SYNC))
+    except (ValueError, TypeError):
         days_input = DAYS_TO_SYNC
     sync_garmin_data(days=days_input)
