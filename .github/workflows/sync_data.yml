@@ -48,7 +48,7 @@ jobs:
           DAYS_TO_SYNC: ${{ github.event.inputs.days || '7' }}
           DAYS: ${{ github.event.inputs.days || '7' }}
         run: |
-          python -m garmin.sync_garmin
+          python -m garmin.sync_garmin "${{ github.event.inputs.days || '7' }}"
 
       - name: Sync Withings Data
         env:
@@ -61,7 +61,7 @@ jobs:
           DAYS: ${{ github.event.inputs.days || '7' }}
         run: |
           cd withings
-          node index.js
+          node index.js "${{ github.event.inputs.days || '7' }}"
 
       - name: Generate Quantified Self
         env:
@@ -70,4 +70,4 @@ jobs:
           DAYS_TO_SYNC: ${{ github.event.inputs.days || '7' }}
           DAYS: ${{ github.event.inputs.days || '7' }}
         run: |
-          python generate_quantified_self.py
+          python generate_quantified_self.py "${{ github.event.inputs.days || '7' }}"
