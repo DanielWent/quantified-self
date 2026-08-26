@@ -1,82 +1,91 @@
 import os
-import sys
 import json
 import logging
-import pandas as pd
-import gspread
-from oauth2client.service_account import ServiceAccountCredentials
-from dotenv import load_dotenv
+from datetime import datetime, timedelta
 
-load_dotenv()
-
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s"
+)
 logger = logging.getLogger(__name__)
 
-SPREADSHEET_KEY = os.getenv("GOOGLE_SPREADSHEET_KEY")
-CREDENTIALS_JSON = os.getenv("GOOGLE_SHEETS_CREDENTIALS")
+def resolve_data_file(filename, subdirs=None):
+    if os.path.exists(filename):
+        return filename
+    if subdirs:
+        for subdir in subdirs:
+            candidate = os.path.join(subdir, filename)
+            if os.path.exists(candidate):
+                return candidate
+    return None
 
-if len(sys.argv) > 1 and sys.argv[1].isdigit():
-    DAYS_TO_SYNC = int(sys.argv[1])
-else:
-    DAYS_TO_SYNC = int(os.getenv("DAYS_TO_SYNC", os.getenv("DAYS", "7")))
+def load_json_file(primary_name, subdirs=None):
+    filepath = resolve_data_file(primary_name, subdirs)
+    if filepath and os.path.exists(filepath):
+        try:
+            with open(filepath, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception as e:
+            logger.warning(f"Failed to read {filepath}: {e}")
+    return []
 
-def get_gspread_client():
-    scope = [
-        "https://spreadsheets.google.com/feeds",
-        "https://www.googleapis.com/auth/drive"
-    ]
-    if os.path.exists(CREDENTIALS_JSON):
-        creds = ServiceAccountCredentials.from_json_keyfile_name(CREDENTIALS_JSON, scope)
-    else:
-        creds_dict = json.loads(CREDENTIALS_JSON)
-        creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
-    return gspread.authorize(creds)
-
-def main():
-    logger.info(f"Aggregating Quantified Self data (configured sync window: {DAYS_TO_SYNC} days)...")
-    gc = get_gspread_client()
-    spreadsheet = gc.open_by_key(SPREADSHEET_KEY)
-
-    garmin_sheet = spreadsheet.worksheet("Garmin")
-    withings_sheet = spreadsheet.worksheet("Withings")
-
-    garmin_data = garmin_sheet.get_all_records()
-    withings_data = withings_sheet.get_all_records()
-
-    if not garmin_data and not withings_data:
-        logger.warning("No data found in Garmin or Withings sheets.")
-        return
-
-    df_garmin = pd.DataFrame(garmin_data)
-    df_withings = pd.DataFrame(withings_data)
-
-    if not df_garmin.empty and "Date" in df_garmin.columns:
-        df_garmin["Date"] = pd.to_datetime(df_garmin["Date"]).dt.strftime("%Y-%m-%d")
-    if not df_withings.empty and "Date" in df_withings.columns:
-        df_withings["Date"] = pd.to_datetime(df_withings["Date"]).dt.strftime("%Y-%m-%d")
-
-    if not df_garmin.empty and not df_withings.empty:
-        merged_df = pd.merge(df_garmin, df_withings, on="Date", how="outer")
-    elif not df_garmin.empty:
-        merged_df = df_garmin
-    else:
-        merged_df = df_withings
-
-    merged_df.sort_values(by="Date", ascending=False, inplace=True)
-    merged_df.drop_duplicates(subset=["Date"], keep="first", inplace=True)
-    merged_df.fillna("", inplace=True)
-
+def calculate_quantified_self():
     try:
-        qs_sheet = spreadsheet.worksheet("Quantified Self")
-    except gspread.WorksheetNotFound:
-        qs_sheet = spreadsheet.add_worksheet(title="Quantified Self", rows=str(max(1000, len(merged_df) + 100)), cols="50")
+        days_to_sync = int(os.getenv("DAYS_TO_SYNC", 7))
+    except (ValueError, TypeError):
+        days_to_sync = 7
 
-    header = merged_df.columns.tolist()
-    values = [header] + merged_df.values.tolist()
+    logger.info(f"Generating Quantified Self aggregation for {days_to_sync} days...")
 
-    qs_sheet.clear()
-    qs_sheet.update("A1", values)
-    logger.info(f"Quantified Self sheet updated successfully with {len(merged_df)} total records.")
+    garmin_records = load_json_file("garmin_data.json", ["garmin", "."])
+    withings_records = load_json_file("withings_data.json", ["withings", "."])
+
+    cutoff_date = (datetime.now() - timedelta(days=days_to_sync)).date().isoformat()
+
+    filtered_garmin = [
+        r for r in garmin_records
+        if isinstance(r, dict) and r.get("date", "") >= cutoff_date
+    ]
+    filtered_withings = [
+        r for r in withings_records
+        if isinstance(r, dict) and r.get("date", "") >= cutoff_date
+    ]
+
+    total_steps = sum(r.get("steps", 0) for r in filtered_garmin)
+    sleep_scores = [r.get("sleep_score") for r in filtered_garmin if r.get("sleep_score") is not None]
+    rhr_values = [r.get("resting_heart_rate") for r in filtered_garmin if r.get("resting_heart_rate") is not None]
+    hrv_values = [r.get("hrv_avg") for r in filtered_garmin if r.get("hrv_avg") is not None]
+
+    weights = []
+    fat_ratios = []
+    for r in filtered_withings:
+        measures = r.get("measures", {})
+        if "weight_kg" in measures:
+            weights.append(measures["weight_kg"])
+        if "fat_ratio_pct" in measures:
+            fat_ratios.append(measures["fat_ratio_pct"])
+
+    summary = {
+        "sync_window_days": days_to_sync,
+        "start_date": cutoff_date,
+        "garmin_days_recorded": len(filtered_garmin),
+        "withings_days_recorded": len(filtered_withings),
+        "metrics": {
+            "total_steps": total_steps,
+            "avg_daily_steps": (total_steps / len(filtered_garmin)) if filtered_garmin else 0,
+            "avg_sleep_score": (sum(sleep_scores) / len(sleep_scores)) if sleep_scores else None,
+            "avg_resting_heart_rate": (sum(rhr_values) / len(rhr_values)) if rhr_values else None,
+            "avg_hrv": (sum(hrv_values) / len(hrv_values)) if hrv_values else None,
+            "avg_weight_kg": (sum(weights) / len(weights)) if weights else None,
+            "avg_fat_ratio_pct": (sum(fat_ratios) / len(fat_ratios)) if fat_ratios else None
+        }
+    }
+
+    output_path = "quantified_self_summary.json"
+    with open(output_path, "w", encoding="utf-8") as f:
+        json.dump(summary, f, indent=2, ensure_ascii=False)
+
+    logger.info(f"Successfully generated {output_path} with {len(filtered_garmin)} Garmin and {len(filtered_withings)} Withings days processed.")
 
 if __name__ == "__main__":
-    main()
+    calculate_quantified_self()
