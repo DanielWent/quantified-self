@@ -50,27 +50,23 @@ def parse_daily_summary(
     sleep_dto = sleep.get("dailySleepDTO", {}) if sleep else {}
     hrv_summary = hrv.get("hrvSummary", {}) if hrv else {}
 
-    # Extract Body Battery charged/drained/highest/lowest
     bb_charged = summary.get("bodyBatteryChargedValue")
     bb_drained = summary.get("bodyBatteryDrainedValue")
     bb_highest = summary.get("bodyBatteryHighestValue")
     bb_lowest = summary.get("bodyBatteryLowestValue")
     bb_most_recent = summary.get("bodyBatteryMostRecentValue")
 
-    # If summary does not have battery metrics, check body_battery array
     if body_battery and isinstance(body_battery, list) and len(body_battery) > 0:
         values = [b.get("charged", 0) for b in body_battery if isinstance(b, dict) and "charged" in b]
         if values and bb_charged is None:
             bb_charged = sum(values)
 
-    # Calculate Total Calories if not explicitly returned
     active_cal = summary.get("activeKilocalories")
     bmr_cal = summary.get("bmrKilocalories")
     total_cal = summary.get("totalKilocalories")
     if total_cal is None and active_cal is not None and bmr_cal is not None:
         total_cal = active_cal + bmr_cal
 
-    # Extract Training Readiness
     readiness_score = None
     readiness_level = None
     if readiness and isinstance(readiness, dict):
@@ -125,7 +121,6 @@ def parse_daily_summary(
     }
 
 def parse_activity(activity: Dict[str, Any]) -> Dict[str, Any]:
-    # Cadence fallback across sport types
     cadence = (
         activity.get("averageRunningCadenceInStepsPerMinute") or
         activity.get("averageBikingCadenceInRevPerMinute") or
