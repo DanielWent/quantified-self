@@ -9,17 +9,27 @@ export function getDriveClient() {
   }
 
   let auth;
-  if (fs.existsSync(config.serviceAccountJson)) {
+  if (typeof config.serviceAccountJson === 'object' && config.serviceAccountJson !== null) {
     auth = new google.auth.GoogleAuth({
-      keyFile: config.serviceAccountJson,
+      credentials: config.serviceAccountJson,
       scopes: ['https://www.googleapis.com/auth/drive']
     });
+  } else if (typeof config.serviceAccountJson === 'string') {
+    if (fs.existsSync(config.serviceAccountJson)) {
+      auth = new google.auth.GoogleAuth({
+        keyFile: config.serviceAccountJson,
+        scopes: ['https://www.googleapis.com/auth/drive']
+      });
+    } else {
+      auth = new google.auth.GoogleAuth({
+        credentials: JSON.parse(config.serviceAccountJson),
+        scopes: ['https://www.googleapis.com/auth/drive']
+      });
+    }
   } else {
-    auth = new google.auth.GoogleAuth({
-      credentials: JSON.parse(config.serviceAccountJson),
-      scopes: ['https://www.googleapis.com/auth/drive']
-    });
+    throw new Error('Invalid GOOGLE_SERVICE_ACCOUNT_JSON credential format.');
   }
+
   return google.drive({ version: 'v3', auth });
 }
 
@@ -54,8 +64,7 @@ export async function getAccessToken() {
 export function decodeMeasurements(measuregrps) {
   const dailyMap = new Map();
 
-  // Sort chronologically so later measurements on the same day take precedence
-  const sortedGroups = [...measuregrps].sort((a, b) => a.date - b.date);
+  const sortedGroups = [...(measuregrps || [])].sort((a, b) => a.date - b.date);
 
   for (const group of sortedGroups) {
     const dateStr = new Date(group.date * 1000).toISOString().split('T')[0];
