@@ -1,78 +1,49 @@
 require('dotenv').config();
 
-module.exports = {
-  CLIENT_ID: process.env.WITHINGS_CLIENT_ID,
-  CLIENT_SECRET: process.env.WITHINGS_CLIENT_SECRET,
-  REFRESH_TOKEN: process.env.WITHINGS_REFRESH_TOKEN,
-  ACCESS_TOKEN: process.env.WITHINGS_ACCESS_TOKEN,
-  REDIRECT_URI: process.env.WITHINGS_REDIRECT_URI || 'http://localhost:3000/callback',
-  GOOGLE_CREDENTIALS_JSON: process.env.GOOGLE_CREDENTIALS_JSON,
-  GOOGLE_PARENT_FOLDER_ID: process.env.GOOGLE_PARENT_FOLDER_ID,
-  OUTPUT_FILENAME: 'drw_withings_bodyscan_data.csv',
-  DEFAULT_USER_HEIGHT_M: 1.85,
+var config = {};
+config.metrics = {};
 
-  MEASURE_TYPES: {
-    1: 'Weight (kg)',
-    4: 'Height (m)',
-    5: 'Fat Free Mass (kg)',
-    6: 'Fat Ratio (%)',
-    8: 'Fat Mass Weight (kg)',
-    9: 'Diastolic Blood Pressure (mmHg)',
-    10: 'Systolic Blood Pressure (mmHg)',
-    11: 'Heart Rate (bpm)',
-    54: 'SpO2 (%)',
-    76: 'Muscle Mass (kg)',
-    77: 'Hydration (kg)',
-    88: 'Bone Mass (kg)',
-    91: 'Pulse Wave Velocity (m/s)',
-    123: 'VO2 Max (ml/min/kg)',
-    155: 'Vascular Age',
-    167: 'Visceral Fat Rating',
-    168: 'Extracellular Water (kg)',
-    169: 'Intracellular Water (kg)',
-    170: 'Visceral Fat Index',
-    174: 'Left Arm Muscle Mass (kg)',
-    175: 'Right Arm Muscle Mass (kg)',
-    178: 'Left Leg Muscle Mass (kg)',
-    179: 'Right Leg Muscle Mass (kg)',
-    180: 'Torso Muscle Mass (kg)',
-    181: 'Left Arm Fat Mass (kg)',
-    182: 'Right Arm Fat Mass (kg)',
-    185: 'Left Leg Fat Mass (kg)',
-    186: 'Right Leg Fat Mass (kg)',
-    187: 'Torso Fat Mass (kg)',
-    196: 'Nerve Health Score',
-    197: 'Left Foot ESC',
-    198: 'Right Foot ESC',
-    226: 'Vascular Age Status'
-  },
+config.withingsClientID = process.env.WITHINGS_CLIENT_ID;
+config.withingsClientSecret = process.env.WITHINGS_CLIENT_SECRET;
+config.withingsState = "random_string_here";
 
-  CSV_HEADERS: [
-    'Date',
-    'Weight (kg)',
-    'Body Mass Index',
-    'Fat Ratio (%)',
-    'Fat Mass Weight (kg)',
-    'Fat Free Mass (kg)',
-    'Muscle Mass (kg)',
-    'Bone Mass (kg)',
-    'Hydration (kg)',
-    'Visceral Fat Rating',
-    'Pulse Wave Velocity (m/s)',
-    'Vascular Age',
-    'Nerve Health Score',
-    'Heart Rate (bpm)',
-    'Extracellular Water (kg)',
-    'Intracellular Water (kg)',
-    'Left Arm Muscle Mass (kg)',
-    'Right Arm Muscle Mass (kg)',
-    'Torso Muscle Mass (kg)',
-    'Left Leg Muscle Mass (kg)',
-    'Right Leg Muscle Mass (kg)',
-    'Left Arm Fat Mass (kg)',
-    'Right Arm Fat Mass (kg)',
-    'Torso Fat Mass (kg)',
-    'Left Leg Fat Mass (kg)',
-    'Right Leg Fat Mass (kg)'
-  ]
+config.data_dir = "./"; 
+config.output_dir = config.data_dir + ".withings2gsheets/";
+
+// Common settings
+config.gsheets_key_path = config.output_dir + "withings2gsheets-service-account.json";
+
+// Define Users
+config.users = [
+    {
+        id: "drw", // Daniel
+        height: 1.85,
+        token_path: config.output_dir + "drw_tokens.json",
+        timestamp_path: config.output_dir + "drw_last_sync.json",
+        driveFileName: "drw_withings_bodyscan_data.csv",
+        driveFolderId: process.env.GOOGLE_DRIVE_FOLDER_ID || "1rcyfE_q64FVBQce_FDmAseuayfDs_RzL",
+        metricList: "1,6,91,130,155,158,170" 
+    },
+    {
+        id: "aflw", // April
+        height: 1.65, 
+        token_path: config.output_dir + "aflw_tokens.json",
+        timestamp_path: config.output_dir + "aflw_last_sync.json",
+        driveFileName: "aflw_withings_bodyscan_data.csv",
+        driveFolderId: "1qOmgohljP-vLVzsyPNver0Ky6neQg0vW",
+        metricList: "1,6,91,130,155,158,170"
+    }
+];
+
+// Map Withings Metric Type IDs to readable names
+config.metrics = {
+    "1": "Weight (kg)",
+    "6": "Body Fat (%)",
+    "91": "Pulse Wave Velocity (m/s)",
+    "130": "AFib Status",
+    "155": "Vascular Age (years)",
+    "158": "Nerve Health Score",
+    "170": "Visceral Fat Rating" 
 };
+
+module.exports = config;
