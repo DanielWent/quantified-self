@@ -1,6 +1,6 @@
-require('dotenv').config();
+import 'dotenv/config';
 
-module.exports = {
+const config = {
   clientId: process.env.WITHINGS_CLIENT_ID,
   clientSecret: process.env.WITHINGS_CLIENT_SECRET,
   refreshToken: process.env.WITHINGS_REFRESH_TOKEN,
@@ -8,3 +8,5 @@ module.exports = {
   googleDriveFolderId: process.env.GOOGLE_DRIVE_FOLDER_ID,
   daysToSync: parseInt(process.env.DAYS_TO_SYNC, 10) || 7
 };
+
+export default config;
