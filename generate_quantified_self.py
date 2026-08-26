@@ -17,12 +17,12 @@ logger = logging.getLogger(__name__)
 SERVICE_ACCOUNT_JSON = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON")
 DRIVE_FOLDER_ID = os.getenv("GOOGLE_DRIVE_FOLDER_ID")
 
-GARMIN_FILENAME = "garmin_data.csv"
-WITHINGS_FILENAME = "withings_data.csv"
+GARMIN_FILENAME = "garmin_daily_summary.csv"
+WITHINGS_FILENAME = "withings_measurements.csv"
 OUTPUT_DATASET_FILENAME = "quantified_self.csv"
 
 def load_csv(drive: Optional[DriveClient], filename: str) -> pd.DataFrame:
-    # 1. Check local data directory
+    # 1. Check local file path
     for local_path in [filename, os.path.join("data", filename)]:
         if os.path.exists(local_path):
             try:
