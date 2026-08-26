@@ -1,99 +1,94 @@
-import io
-import json
-import logging
 import os
-from typing import Any, Dict, Optional, Union
+import json
+import base64
+import logging
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseDownload, MediaIoBaseUpload
-from exceptions import DriveSyncError
+from googleapiclient.http import MediaFileUpload
 
 logger = logging.getLogger(__name__)
 
 class DriveClient:
-    def __init__(self, service_account_info_or_path: Union[str, Dict[str, Any]], folder_id: str):
+    def __init__(self, credentials_raw, folder_id=None):
         self.folder_id = folder_id
-        scopes = ['https://www.googleapis.com/auth/drive']
+        self.service = self._init_drive_service(credentials_raw)
 
-        if not service_account_info_or_path:
-            raise DriveSyncError("GOOGLE_SERVICE_ACCOUNT_JSON is not configured or empty.")
-
+    def _init_drive_service(self, credentials_raw):
         try:
-            if isinstance(service_account_info_or_path, dict):
-                self.creds = service_account.Credentials.from_service_account_info(
-                    service_account_info_or_path, scopes=scopes
-                )
-            elif isinstance(service_account_info_or_path, str):
-                if os.path.exists(service_account_info_or_path):
-                    self.creds = service_account.Credentials.from_service_account_file(
-                        service_account_info_or_path, scopes=scopes
-                    )
-                else:
-                    info = json.loads(service_account_info_or_path)
-                    self.creds = service_account.Credentials.from_service_account_info(
-                        info, scopes=scopes
-                    )
+            if os.path.exists(credentials_raw):
+                with open(credentials_raw, "r", encoding="utf-8") as f:
+                    creds_dict = json.load(f)
             else:
-                raise DriveSyncError(f"Unsupported credentials type: {type(service_account_info_or_path)}")
+                try:
+                    decoded = base64.b64decode(credentials_raw).decode("utf-8")
+                    creds_dict = json.loads(decoded)
+                except Exception:
+                    creds_dict = json.loads(credentials_raw)
 
-            self.service = build('drive', 'v3', credentials=self.creds)
+            scopes = ["https://www.googleapis.com/auth/drive"]
+            creds = service_account.Credentials.from_service_account_info(
+                creds_dict, scopes=scopes
+            )
+            return build("drive", "v3", credentials=creds)
         except Exception as e:
-            raise DriveSyncError(f"Failed to initialize Google Drive client: {e}")
+            logger.error(f"Failed to initialize Google Drive service: {e}")
+            raise
 
-    def find_file(self, filename: str) -> Optional[str]:
-        try:
-            query = f"name = '{filename}' and '{self.folder_id}' in parents and trashed = false"
-            results = self.service.files().list(
-                q=query,
-                fields="files(id, name)",
-                supportsAllDrives=True,
-                includeItemsFromAllDrives=True
+    def upload_file(self, file_path, folder_id=None, convert_to_sheets=False):
+        target_folder = folder_id or self.folder_id
+        file_name = os.path.basename(file_path)
+
+        query = f"name = '{file_name}' and trashed = false"
+        if target_folder:
+            query += f" and '{target_folder}' in parents"
+
+        response = self.service.files().list(q=query, spaces="drive", fields="files(id, name)").execute()
+        existing_files = response.get("files", [])
+
+        mime_type = "text/csv" if file_path.endswith(".csv") else "application/json"
+        media = MediaFileUpload(file_path, mimetype=mime_type, resumable=True)
+
+        if convert_to_sheets and file_path.endswith(".csv"):
+            for existing in existing_files:
+                try:
+                    self.service.files().delete(fileId=existing["id"]).execute()
+                    logger.info(f"Replaced existing Google Sheet '{file_name}' (ID: {existing['id']})")
+                except Exception as e:
+                    logger.warning(f"Failed to delete existing file {existing['id']}: {e}")
+
+            file_metadata = {
+                "name": file_name,
+                "mimeType": "application/vnd.google-apps.spreadsheet"
+            }
+            if target_folder:
+                file_metadata["parents"] = [target_folder]
+
+            created_file = self.service.files().create(
+                body=file_metadata,
+                media_body=media,
+                fields="id, name"
             ).execute()
-            files = results.get('files', [])
-            return files[0]['id'] if files else None
-        except Exception as e:
-            raise DriveSyncError(f"Failed searching for {filename}: {e}")
+            logger.info(f"Created Google Sheet '{file_name}' (ID: {created_file.get('id')})")
+            return created_file.get("id")
 
-    def download_csv(self, file_id: str) -> io.BytesIO:
-        try:
-            request = self.service.files().get_media(fileId=file_id, supportsAllDrives=True)
-            fh = io.BytesIO()
-            downloader = MediaIoBaseDownload(fh, request)
-            done = False
-            while not done:
-                _, done = downloader.next_chunk()
-            fh.seek(0)
-            return fh
-        except Exception as e:
-            raise DriveSyncError(f"Failed downloading file ID {file_id}: {e}")
+        if existing_files:
+            file_id = existing_files[0]["id"]
+            updated_file = self.service.files().update(
+                fileId=file_id,
+                media_body=media,
+                fields="id, name"
+            ).execute()
+            logger.info(f"Updated existing file '{file_name}' (ID: {updated_file.get('id')})")
+            return updated_file.get("id")
+        else:
+            file_metadata = {"name": file_name}
+            if target_folder:
+                file_metadata["parents"] = [target_folder]
 
-    def upload_or_update_csv(self, filename: str, csv_content: str) -> None:
-        file_id = self.find_file(filename)
-        media = MediaIoBaseUpload(io.BytesIO(csv_content.encode('utf-8')), mimetype='text/csv', resumable=True)
-
-        try:
-            if file_id:
-                self.service.files().update(
-                    fileId=file_id,
-                    media_body=media,
-                    supportsAllDrives=True
-                ).execute()
-                logger.info(f"Updated '{filename}' on Google Drive.")
-            else:
-                file_metadata = {'name': filename, 'parents': [self.folder_id]}
-                self.service.files().create(
-                    body=file_metadata,
-                    media_body=media,
-                    supportsAllDrives=True
-                ).execute()
-                logger.info(f"Created '{filename}' on Google Drive.")
-        except Exception as e:
-            err_str = str(e)
-            if "storageQuotaExceeded" in err_str or "Service Accounts do not have storage quota" in err_str:
-                raise DriveSyncError(
-                    f"\n[Drive Storage Quota Error]\n"
-                    f"File '{filename}' was not found in Google Drive folder ({self.folder_id}).\n"
-                    f"Google Service Accounts cannot create new files in personal Drives.\n"
-                    f"Please ensure '{filename}' exists in the folder."
-                ) from e
-            raise DriveSyncError(f"Failed uploading '{filename}': {e}")
+            created_file = self.service.files().create(
+                body=file_metadata,
+                media_body=media,
+                fields="id, name"
+            ).execute()
+            logger.info(f"Created new file '{file_name}' (ID: {created_file.get('id')})")
+            return created_file.get("id")
