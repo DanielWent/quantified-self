@@ -9,13 +9,16 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 async function getAccessToken(clientId, clientSecret, refreshToken) {
-  const response = await axios.post('https://wbsapi.withings.net/v2/oauth2', null, {
-    params: {
-      action: 'requesttoken',
-      grant_type: 'refresh_token',
-      client_id: clientId,
-      client_secret: clientSecret,
-      refresh_token: refreshToken
+  const params = new URLSearchParams();
+  params.append('action', 'requesttoken');
+  params.append('grant_type', 'refresh_token');
+  params.append('client_id', clientId);
+  params.append('client_secret', clientSecret);
+  params.append('refresh_token', refreshToken);
+
+  const response = await axios.post('https://wbsapi.withings.net/v2/oauth2', params, {
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded'
     }
   });
 
