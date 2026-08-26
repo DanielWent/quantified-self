@@ -2,7 +2,7 @@ name: Sync Quantified Self Data
 
 on:
   schedule:
-    - cron: '0 6 * * *'  # Daily at 06:00 UTC
+    - cron: '0 6 * * *'
   workflow_dispatch:
     inputs:
       days:
@@ -14,7 +14,7 @@ jobs:
   sync:
     runs-on: ubuntu-latest
     env:
-      DAYS_TO_SYNC: ${{ github.event.inputs.days || '7' }}
+      DAYS_TO_SYNC: ${{ inputs.days || github.event.inputs.days || '7' }}
       GOOGLE_DRIVE_CREDENTIALS: ${{ secrets.GOOGLE_DRIVE_CREDENTIALS }}
       GOOGLE_DRIVE_FOLDER_ID: ${{ secrets.GOOGLE_DRIVE_FOLDER_ID }}
 
