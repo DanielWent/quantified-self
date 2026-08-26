@@ -29,8 +29,11 @@ async function fetchAllMeasurements(accessToken, startDate, endDate) {
   let allGroups = [];
   let offset = 0;
   let hasMore = true;
+  let pageCount = 0;
+  const MAX_PAGES = 100;
 
-  while (hasMore) {
+  while (hasMore && pageCount < MAX_PAGES) {
+    pageCount++;
     const params = {
       action: 'getmeas',
       startdate: startDate,
