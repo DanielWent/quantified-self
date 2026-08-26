@@ -68,10 +68,10 @@ class DriveClient:
             raise DriveSyncError(f"Failed downloading file ID {file_id}: {e}")
 
     def upload_or_update_csv(self, filename: str, csv_content: str) -> None:
-        try:
-            file_id = self.find_file(filename)
-            media = MediaIoBaseUpload(io.BytesIO(csv_content.encode('utf-8')), mimetype='text/csv', resumable=True)
+        file_id = self.find_file(filename)
+        media = MediaIoBaseUpload(io.BytesIO(csv_content.encode('utf-8')), mimetype='text/csv', resumable=True)
 
+        try:
             if file_id:
                 self.service.files().update(
                     fileId=file_id,
@@ -88,4 +88,12 @@ class DriveClient:
                 ).execute()
                 logger.info(f"Created '{filename}' on Google Drive.")
         except Exception as e:
+            err_str = str(e)
+            if "storageQuotaExceeded" in err_str or "Service Accounts do not have storage quota" in err_str:
+                raise DriveSyncError(
+                    f"\n[Drive Storage Quota Error]\n"
+                    f"File '{filename}' was not found in Google Drive folder ({self.folder_id}).\n"
+                    f"Google Service Accounts cannot create new files in personal Drives.\n"
+                    f"Please ensure '{filename}' exists in the folder."
+                ) from e
             raise DriveSyncError(f"Failed uploading '{filename}': {e}")
