@@ -1,168 +1,100 @@
-import os
-import sys
-import csv
-import json
 import logging
-from datetime import datetime, timedelta
-from config import (
-    GOOGLE_DRIVE_CREDENTIALS,
-    GOOGLE_DRIVE_FOLDER_ID,
-    DAYS_TO_SYNC
-)
-from garmin_client import GarminClient
-from drive_client import DriveClient
-from parser import parse_garmin_data
+import io
+import pandas as pd
+from datetime import datetime, timedelta, date
+from typing import List, Dict, Any
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s"
+from garmin.config import (
+    GARMIN_DATA_FILENAME,
+    GARMIN_ACTIVITIES_FILENAME,
+    GARMIN_DATA_HEADERS,
+    GARMIN_ACTIVITIES_HEADERS,
 )
+from garmin.garmin_client import GarminClient
+from garmin.parser import parse_daily_data, parse_activity
+from garmin.drive_client import DriveClient
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
-def sync_garmin_data(days=DAYS_TO_SYNC):
-    logger.info(f"Starting Garmin sync for the past {days} days...")
-    
-    drive_client = None
-    if GOOGLE_DRIVE_CREDENTIALS:
-        try:
-            drive_client = DriveClient(GOOGLE_DRIVE_CREDENTIALS, GOOGLE_DRIVE_FOLDER_ID)
-        except Exception as e:
-            logger.warning(f"Failed to initialize Drive client: {e}")
 
-    garmin_client = GarminClient()
+def sync_garmin_data(days_back: int = 30):
+    garmin = GarminClient()
+    garmin.login()
 
-    today = datetime.now().date()
-    start_date = today - timedelta(days=days)
-    
-    activities = []
-    try:
-        activities = garmin_client.get_activities(
-            start_date=start_date.isoformat(),
-            end_date=today.isoformat(),
-            limit=max(days * 3, 1000)
-        ) or []
-        logger.info(f"Retrieved {len(activities)} activities across {days} days.")
-    except Exception as e:
-        logger.warning(f"Error fetching activities: {e}")
+    drive = DriveClient()
 
-    all_data = []
-    for i in range(days):
-        current_date = today - timedelta(days=i)
-        date_str = current_date.isoformat()
-        try:
-            stats = None
-            sleep = None
-            rhr = None
-            hrv = None
+    # 1. Sync Daily Data
+    logger.info("Fetching existing Garmin Daily Data from Google Drive...")
+    existing_daily_content = drive.download_file_by_name(GARMIN_DATA_FILENAME)
+    if existing_daily_content:
+        df_daily = pd.read_csv(io.StringIO(existing_daily_content))
+    else:
+        df_daily = pd.DataFrame(columns=GARMIN_DATA_HEADERS)
 
-            try:
-                stats = garmin_client.get_stats(date_str)
-            except Exception as e:
-                logger.debug(f"Stats unavailable for {date_str}: {e}")
+    start_date = date.today() - timedelta(days=days_back)
+    end_date = date.today()
 
-            try:
-                sleep = garmin_client.get_sleep_data(date_str)
-            except Exception as e:
-                logger.debug(f"Sleep data unavailable for {date_str}: {e}")
+    daily_rows: List[Dict[str, Any]] = []
+    current = start_date
+    while current <= end_date:
+        date_str = current.strftime("%Y-%m-%d")
+        logger.info(f"Retrieving daily data for {date_str}...")
 
-            try:
-                rhr = garmin_client.get_rhr_data(date_str)
-            except Exception as e:
-                logger.debug(f"RHR data unavailable for {date_str}: {e}")
+        summary = garmin.get_user_summary(date_str)
+        sleep = garmin.get_sleep_data(date_str)
+        hrv = garmin.get_hrv_data(date_str)
+        resp = garmin.get_respiration_data(date_str)
+        spo2 = garmin.get_spo2_data(date_str)
+        training_status = garmin.get_training_status(date_str)
+        max_metrics = garmin.get_max_metrics(date_str)
 
-            try:
-                hrv = garmin_client.get_hrv_data(date_str)
-            except Exception as e:
-                logger.debug(f"HRV data unavailable for {date_str}: {e}")
+        row = parse_daily_data(
+            date_str, summary, sleep, hrv, resp, spo2, training_status, max_metrics
+        )
+        daily_rows.append(row)
+        current += timedelta(days=1)
 
-            day_data = parse_garmin_data(date_str, stats, sleep, rhr, hrv, activities)
-            all_data.append(day_data)
-        except Exception as e:
-            logger.warning(f"Error processing Garmin data for {date_str}: {e}")
-            continue
+    new_df_daily = pd.DataFrame(daily_rows)
+    combined_daily = (
+        pd.concat([df_daily, new_df_daily], ignore_index=True)
+        .drop_duplicates(subset=["Date"], keep="last")
+        .sort_values(by="Date", ascending=False)
+    )
+    combined_daily = combined_daily.reindex(columns=GARMIN_DATA_HEADERS)
 
-    # Save local JSON cache
-    with open("garmin_data.json", "w", encoding="utf-8") as f:
-        json.dump(all_data, f, indent=2, ensure_ascii=False)
-    logger.info(f"Saved {len(all_data)} daily records to garmin_data.json")
+    drive.upload_csv(GARMIN_DATA_FILENAME, combined_daily.to_csv(index=False))
+    logger.info(f"Uploaded updated {GARMIN_DATA_FILENAME} ({len(combined_daily)} rows)")
 
-    # 1. Generate garmin_daily_summary.csv
-    daily_csv = "garmin_daily_summary.csv"
-    daily_headers = [
-        "Date", "Steps", "Distance (km)", "VO2 Max",
-        "Resting Heart Rate (bpm)", "HRV Avg (ms)", "Sleep Duration (hours)", "Sleep Score"
-    ]
-    daily_rows = []
-    for d in sorted(all_data, key=lambda x: x.get("date", ""), reverse=True):
-        dist_km = round(d.get("distance_meters", 0.0) / 1000.0, 2) if d.get("distance_meters") else ""
-        sleep_hrs = round(d.get("sleep_duration_seconds", 0) / 3600.0, 2) if d.get("sleep_duration_seconds") else ""
-        daily_rows.append([
-            d.get("date", ""),
-            d.get("steps", ""),
-            dist_km,
-            d.get("vo2_max", ""),
-            d.get("resting_heart_rate", ""),
-            d.get("hrv_avg", ""),
-            sleep_hrs,
-            d.get("sleep_score", "")
-        ])
+    # 2. Sync Activities Data
+    logger.info("Fetching existing Garmin Activities List from Google Drive...")
+    existing_act_content = drive.download_file_by_name(GARMIN_ACTIVITIES_FILENAME)
+    if existing_act_content:
+        df_act = pd.read_csv(io.StringIO(existing_act_content))
+    else:
+        df_act = pd.DataFrame(columns=GARMIN_ACTIVITIES_HEADERS)
 
-    with open(daily_csv, "w", newline="", encoding="utf-8") as f:
-        writer = csv.writer(f)
-        writer.writerow(daily_headers)
-        writer.writerows(daily_rows)
-    logger.info(f"Generated {daily_csv} with {len(daily_rows)} rows.")
+    logger.info(f"Retrieving activities from {start_date} to {end_date}...")
+    raw_activities = garmin.get_activities_by_date(
+        start_date.strftime("%Y-%m-%d"), end_date.strftime("%Y-%m-%d")
+    )
 
-    # 2. Generate garmin_activities.csv
-    activities_csv = "garmin_activities.csv"
-    activity_headers = [
-        "Activity ID", "Date", "Name", "Type", "Distance (km)",
-        "Duration (mins)", "Average HR (bpm)", "Max HR (bpm)", "Average Pace (min/km)"
-    ]
-    activity_rows = []
-    for d in sorted(all_data, key=lambda x: x.get("date", ""), reverse=True):
-        for act in d.get("activities", []):
-            dist_km = round(act.get("distance_meters", 0.0) / 1000.0, 2) if act.get("distance_meters") else ""
-            dur_mins = round(act.get("duration_seconds", 0.0) / 60.0, 2) if act.get("duration_seconds") else ""
-            
-            speed_ms = act.get("avg_pace_meter_per_sec")
-            pace_str = ""
-            if speed_ms and speed_ms > 0:
-                sec_per_km = 1000.0 / speed_ms
-                pace_mins = int(sec_per_km // 60)
-                pace_secs = int(sec_per_km % 60)
-                pace_str = f"{pace_mins:02d}:{pace_secs:02d}"
+    activity_rows = [parse_activity(act) for act in raw_activities]
+    new_df_act = pd.DataFrame(activity_rows)
 
-            activity_rows.append([
-                act.get("activity_id", ""),
-                d.get("date", ""),
-                act.get("name", ""),
-                act.get("type", ""),
-                dist_km,
-                dur_mins,
-                act.get("average_hr", ""),
-                act.get("max_hr", ""),
-                pace_str
-            ])
+    if not new_df_act.empty:
+        combined_act = (
+            pd.concat([df_act, new_df_act], ignore_index=True)
+            .drop_duplicates(subset=["Activity ID"], keep="last")
+            .sort_values(by="Start Time", ascending=False)
+        )
+    else:
+        combined_act = df_act
 
-    with open(activities_csv, "w", newline="", encoding="utf-8") as f:
-        writer = csv.writer(f)
-        writer.writerow(activity_headers)
-        writer.writerows(activity_rows)
-    logger.info(f"Generated {activities_csv} with {len(activity_rows)} rows.")
+    combined_act = combined_act.reindex(columns=GARMIN_ACTIVITIES_HEADERS)
+    drive.upload_csv(GARMIN_ACTIVITIES_FILENAME, combined_act.to_csv(index=False))
+    logger.info(f"Uploaded updated {GARMIN_ACTIVITIES_FILENAME} ({len(combined_act)} rows)")
 
-    # Upload to Google Drive
-    if drive_client:
-        try:
-            drive_client.upload_file(daily_csv, GOOGLE_DRIVE_FOLDER_ID)
-            drive_client.upload_file(activities_csv, GOOGLE_DRIVE_FOLDER_ID)
-            logger.info("Updated garmin_daily_summary.csv and garmin_activities.csv on Google Drive.")
-        except Exception as e:
-            logger.error(f"Failed to upload Garmin files to Drive: {e}")
 
 if __name__ == "__main__":
-    try:
-        days_input = int(os.getenv("DAYS_TO_SYNC", str(DAYS_TO_SYNC)))
-    except (ValueError, TypeError):
-        days_input = DAYS_TO_SYNC
-    sync_garmin_data(days=days_input)
+    sync_garmin_data(days_back=30)
