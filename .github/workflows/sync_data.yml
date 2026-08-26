@@ -20,7 +20,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: '3.11'
 
       - name: Install Python dependencies
         run: |
@@ -48,7 +48,8 @@ jobs:
           DAYS_TO_SYNC: ${{ github.event.inputs.days || '7' }}
           DAYS: ${{ github.event.inputs.days || '7' }}
         run: |
-          python -m garmin.sync_garmin "${{ github.event.inputs.days || '7' }}"
+          cd garmin
+          python sync_garmin.py "${{ github.event.inputs.days || '7' }}"
 
       - name: Sync Withings Data
         env:
