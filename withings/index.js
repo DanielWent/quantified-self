@@ -1,108 +1,83 @@
-const axios = require('axios');
-const {
-  CLIENT_ID,
-  CLIENT_SECRET,
-  REFRESH_TOKEN,
-  OUTPUT_FILENAME,
-  CSV_HEADERS,
-  DEFAULT_USER_HEIGHT_M
-} = require('./config');
-const { parseMeasureGroups, csvToObjects, objectsToCsv } = require('./utils');
-const { downloadFileByName, uploadCsv } = require('./drive');
+const fs = require('fs');
+const util = require('util');
 
-async function getAccessToken() {
-  try {
-    const response = await axios.post('https://wbsapi.withings.net/v2/oauth2', null, {
-      params: {
-        action: 'requesttoken',
-        grant_type: 'refresh_token',
-        client_id: CLIENT_ID,
-        client_secret: CLIENT_SECRET,
-        refresh_token: REFRESH_TOKEN
-      }
-    });
+// --- GLOBAL LOG FILE OVERRIDE ---
+const logFile = './sync-debug.log';
+fs.writeFileSync(logFile, `=== STARTING SYNC RUN: ${new Date().toISOString()} ===\n`);
 
-    if (response.data.status !== 0) {
-      throw new Error(`Withings Auth Error: status ${response.data.status}`);
+const logStdout = process.stdout;
+const logStderr = process.stderr;
+
+console.log = function() {
+    const msg = util.format.apply(null, arguments) + '\n';
+    fs.appendFileSync(logFile, msg);
+    logStdout.write(msg);
+};
+console.error = function() {
+    const msg = '[ERROR] ' + util.format.apply(null, arguments) + '\n';
+    fs.appendFileSync(logFile, msg);
+    logStderr.write(msg);
+};
+console.warn = function() {
+    const msg = '[WARN] ' + util.format.apply(null, arguments) + '\n';
+    fs.appendFileSync(logFile, msg);
+    logStderr.write(msg);
+};
+// --------------------------------
+
+const config = require('./config');
+const utils = require('./utils');
+
+async function doEverything() {
+    console.log("Starting Withings Sync Process...");
+    
+    if (!fs.existsSync(config.output_dir)) {
+        console.log(`Creating output directory: ${config.output_dir}`);
+        fs.mkdirSync(config.output_dir, { recursive: true });
     }
 
-    return response.data.body.access_token;
-  } catch (error) {
-    console.error('Failed to refresh access token:', error.message);
-    throw error;
-  }
-}
-
-async function fetchWithingsMeasures(accessToken, lastUpdateTimestamp = 0) {
-  try {
-    // Requesting without restricting meastypes returns all Body Scan metrics
-    const response = await axios.get('https://wbsapi.withings.net/measure', {
-      headers: {
-        Authorization: `Bearer ${accessToken}`
-      },
-      params: {
-        action: 'getmeas',
-        category: 1,
-        lastupdate: lastUpdateTimestamp
-      }
-    });
-
-    if (response.data.status !== 0) {
-      throw new Error(`Withings API Error: status ${response.data.status}`);
+    if (!config.users || config.users.length === 0) {
+        console.error("No users defined in config.users!");
+        return;
     }
 
-    return response.data.body.measuregrps || [];
-  } catch (error) {
-    console.error('Failed to fetch measures from Withings:', error.message);
-    throw error;
-  }
-}
+    // Loop through each user defined in config.js
+    for (const user of config.users) {
+        console.log(`\n--- Processing User: ${user.id} ---`);
+        
+        // Seed initial token from environment variable if token file does not exist yet
+        if (!fs.existsSync(user.token_path) && process.env.WITHINGS_REFRESH_TOKEN && user.id === 'drw') {
+            console.log(`Initializing ${user.token_path} from environment refresh token.`);
+            fs.writeFileSync(user.token_path, JSON.stringify({
+                accessToken: '',
+                refreshToken: process.env.WITHINGS_REFRESH_TOKEN
+            }, null, 2));
+        }
 
-async function syncWithingsData() {
-  console.log('Starting Withings Body Scan sync...');
-  const accessToken = await getAccessToken();
-
-  console.log('Fetching existing CSV from Google Drive...');
-  const existingCsv = await downloadFileByName(OUTPUT_FILENAME);
-  let existingData = [];
-  let lastTimestamp = 0;
-
-  if (existingCsv) {
-    existingData = csvToObjects(existingCsv);
-    if (existingData.length > 0) {
-      const dates = existingData
-        .map((d) => new Date(d.Date).getTime())
-        .filter((t) => !isNaN(t));
-      if (dates.length > 0) {
-        lastTimestamp = Math.floor(Math.max(...dates) / 1000);
-      }
+        if (fs.existsSync(user.token_path)) {
+            try {
+                console.log(`Reading tokens from ${user.token_path}`);
+                const tokenData = fs.readFileSync(user.token_path, 'utf8');
+                const tokens = JSON.parse(tokenData);
+                const currentTime = Math.floor(Date.now() / 1000);
+                
+                console.log(`Current UNIX time evaluated as: ${currentTime}`);
+                await utils.getWithingsData(tokens.accessToken, tokens.refreshToken, currentTime, user);
+            } catch (err) {
+                console.error(`Failed during processing for user ${user.id}:`, err.message);
+                console.error(err.stack);
+            }
+        } else {
+            console.log(`No tokens found for ${user.id} at ${user.token_path}. Skipping.`);
+        }
     }
-  }
-
-  console.log(`Fetching measures from Withings (after timestamp ${lastTimestamp})...`);
-  const measureGroups = await fetchWithingsMeasures(accessToken, lastTimestamp);
-  console.log(`Retrieved ${measureGroups.length} measure groups.`);
-
-  const newRows = parseMeasureGroups(measureGroups, DEFAULT_USER_HEIGHT_M);
-
-  const mergedMap = new Map();
-  existingData.forEach((row) => mergedMap.set(row.Date, row));
-  newRows.forEach((row) => mergedMap.set(row.Date, row));
-
-  const finalRows = Array.from(mergedMap.values()).sort(
-    (a, b) => new Date(b.Date).getTime() - new Date(a.Date).getTime()
-  );
-
-  const updatedCsv = objectsToCsv(finalRows, CSV_HEADERS);
-  await uploadCsv(OUTPUT_FILENAME, updatedCsv);
-  console.log(`Successfully uploaded ${OUTPUT_FILENAME} with ${finalRows.length} total rows.`);
 }
 
-if (require.main === module) {
-  syncWithingsData().catch((err) => {
-    console.error('Sync failed:', err);
+doEverything().then(() => {
+    console.log("\nAll users processed. Shutting down normally.");
+    process.exit(0);
+}).catch(err => {
+    console.error("Fatal unhandled error in doEverything:", err.message);
+    console.error(err.stack);
     process.exit(1);
-  });
-}
-
-module.exports = { syncWithingsData };
+});
