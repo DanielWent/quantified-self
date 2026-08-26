@@ -7,7 +7,8 @@ import pandas as pd
 
 from config import (
     GARMIN_EMAIL, GARMIN_PASSWORD, GARMIN_TOKENS_PATH,
-    GOOGLE_SERVICE_ACCOUNT_JSON, GOOGLE_DRIVE_FOLDER_ID
+    GOOGLE_SERVICE_ACCOUNT_JSON, GOOGLE_DRIVE_FOLDER_ID,
+    GARMIN_DATA_FILENAME, GARMIN_ACTIVITIES_FILENAME
 )
 from drive_client import DriveClient
 from garmin_client import GarminClient
@@ -45,7 +46,7 @@ def main(days_back: int = 7) -> None:
     start_date = end_date - timedelta(days=days_back)
     logger.info(f"Syncing Garmin data from {start_date} to {end_date} ({days_back} days)...")
 
-    # 1. Fetch complete daily telemetry
+    # 1. Fetch complete daily telemetry into garmin_data.csv
     daily_rows = []
     curr = start_date
     while curr <= end_date:
@@ -78,15 +79,15 @@ def main(days_back: int = 7) -> None:
         curr += timedelta(days=1)
 
     if daily_rows:
-        sync_dataframe_to_drive(drive, "garmin_daily_summary.csv", pd.DataFrame(daily_rows), key="date")
+        sync_dataframe_to_drive(drive, GARMIN_DATA_FILENAME, pd.DataFrame(daily_rows), key="date")
 
-    # 2. Fetch all individual workouts/activities
+    # 2. Fetch workout activities into garmin_activities.csv
     try:
         activity_limit = max(50, days_back * 4)
         activities = garmin.get_activities(start=0, limit=activity_limit)
         parsed = [parse_activity(a) for a in activities]
         if parsed:
-            sync_dataframe_to_drive(drive, "garmin_activities.csv", pd.DataFrame(parsed), key="activity_id")
+            sync_dataframe_to_drive(drive, GARMIN_ACTIVITIES_FILENAME, pd.DataFrame(parsed), key="activity_id")
     except Exception as e:
         logger.error(f"Failed syncing Garmin activities: {e}")
 
