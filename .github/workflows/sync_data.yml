@@ -1,65 +1,73 @@
-name: Sync Health Data & Generate Quantified Self Dataset
+name: Sync Health Data
 
 on:
   schedule:
-    - cron: '0 6 * * *'
+    - cron: '0 4 * * *'
   workflow_dispatch:
     inputs:
       days:
-        description: 'Number of trailing days to fetch/process'
+        description: 'Number of days to sync'
         required: false
         default: '7'
-        type: string
 
 jobs:
   sync:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Check out repository
+      - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
-          cache: 'pip'
+          python-version: '3.10'
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r garmin/requirements.txt
+          pip install gspread oauth2client pandas python-dotenv
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
 
-      - name: Install Node Dependencies & Sync Withings
+      - name: Install Node dependencies
         run: |
           cd withings
-          npm install
-          node index.js
-        env:
-          WITHINGS_CLIENT_ID: ${{ secrets.WITHINGS_CLIENT_ID }}
-          WITHINGS_CLIENT_SECRET: ${{ secrets.WITHINGS_CLIENT_SECRET }}
-          WITHINGS_REFRESH_TOKEN: ${{ secrets.WITHINGS_REFRESH_TOKEN }}
-          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON || secrets.GOOGLE_CREDENTIALS }}
-          GOOGLE_DRIVE_FOLDER_ID: ${{ secrets.GOOGLE_DRIVE_FOLDER_ID }}
-          SYNC_DAYS: ${{ github.event.inputs.days || '7' }}
+          npm ci || npm install
 
-      - name: Install Python Dependencies & Sync Garmin
-        run: |
-          pip install -r garmin/requirements.txt
-          python garmin/main.py
+      - name: Sync Garmin Data
         env:
           GARMIN_EMAIL: ${{ secrets.GARMIN_EMAIL }}
           GARMIN_PASSWORD: ${{ secrets.GARMIN_PASSWORD }}
           GARMIN_TOKEN: ${{ secrets.GARMIN_TOKEN }}
-          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON || secrets.GOOGLE_CREDENTIALS }}
-          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON || secrets.GOOGLE_CREDENTIALS }}
-          GOOGLE_DRIVE_FOLDER_ID: ${{ secrets.GOOGLE_DRIVE_FOLDER_ID }}
-          SYNC_DAYS: ${{ github.event.inputs.days || '7' }}
+          GOOGLE_SHEETS_CREDENTIALS: ${{ secrets.GOOGLE_SHEETS_CREDENTIALS }}
+          GOOGLE_SPREADSHEET_KEY: ${{ secrets.GOOGLE_SPREADSHEET_KEY }}
+          DAYS_TO_SYNC: ${{ github.event.inputs.days || '7' }}
+          DAYS: ${{ github.event.inputs.days || '7' }}
+        run: |
+          python -m garmin.sync_garmin
 
-      - name: Generate & Upload Quantified Self Dataset
+      - name: Sync Withings Data
+        env:
+          WITHINGS_CLIENT_ID: ${{ secrets.WITHINGS_CLIENT_ID }}
+          WITHINGS_CLIENT_SECRET: ${{ secrets.WITHINGS_CLIENT_SECRET }}
+          WITHINGS_REFRESH_TOKEN: ${{ secrets.WITHINGS_REFRESH_TOKEN }}
+          GOOGLE_SHEETS_CREDENTIALS: ${{ secrets.GOOGLE_SHEETS_CREDENTIALS }}
+          GOOGLE_SPREADSHEET_KEY: ${{ secrets.GOOGLE_SPREADSHEET_KEY }}
+          DAYS_TO_SYNC: ${{ github.event.inputs.days || '7' }}
+          DAYS: ${{ github.event.inputs.days || '7' }}
+        run: |
+          cd withings
+          node index.js
+
+      - name: Generate Quantified Self
+        env:
+          GOOGLE_SHEETS_CREDENTIALS: ${{ secrets.GOOGLE_SHEETS_CREDENTIALS }}
+          GOOGLE_SPREADSHEET_KEY: ${{ secrets.GOOGLE_SPREADSHEET_KEY }}
+          DAYS_TO_SYNC: ${{ github.event.inputs.days || '7' }}
+          DAYS: ${{ github.event.inputs.days || '7' }}
         run: |
           python generate_quantified_self.py
-        env:
-          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON || secrets.GOOGLE_CREDENTIALS }}
-          GOOGLE_CREDENTIALS: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON || secrets.GOOGLE_CREDENTIALS }}
-          GOOGLE_DRIVE_FOLDER_ID: ${{ secrets.GOOGLE_DRIVE_FOLDER_ID }}
