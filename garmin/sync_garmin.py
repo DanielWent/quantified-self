@@ -1,5 +1,6 @@
 import os
 import sys
+import csv
 import json
 import logging
 from datetime import datetime, timedelta
@@ -80,17 +81,84 @@ def sync_garmin_data(days=DAYS_TO_SYNC):
             logger.warning(f"Error processing Garmin data for {date_str}: {e}")
             continue
 
-    output_filename = "garmin_data.json"
-    with open(output_filename, "w", encoding="utf-8") as f:
+    # Save local JSON cache
+    with open("garmin_data.json", "w", encoding="utf-8") as f:
         json.dump(all_data, f, indent=2, ensure_ascii=False)
-    logger.info(f"Saved {len(all_data)} daily records to {output_filename}")
+    logger.info(f"Saved {len(all_data)} daily records to garmin_data.json")
 
+    # 1. Generate garmin_daily_summary.csv
+    daily_csv = "garmin_daily_summary.csv"
+    daily_headers = [
+        "Date", "Steps", "Distance (km)", "VO2 Max",
+        "Resting Heart Rate (bpm)", "HRV Avg (ms)", "Sleep Duration (hours)", "Sleep Score"
+    ]
+    daily_rows = []
+    for d in sorted(all_data, key=lambda x: x.get("date", ""), reverse=True):
+        dist_km = round(d.get("distance_meters", 0.0) / 1000.0, 2) if d.get("distance_meters") else ""
+        sleep_hrs = round(d.get("sleep_duration_seconds", 0) / 3600.0, 2) if d.get("sleep_duration_seconds") else ""
+        daily_rows.append([
+            d.get("date", ""),
+            d.get("steps", ""),
+            dist_km,
+            d.get("vo2_max", ""),
+            d.get("resting_heart_rate", ""),
+            d.get("hrv_avg", ""),
+            sleep_hrs,
+            d.get("sleep_score", "")
+        ])
+
+    with open(daily_csv, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(daily_headers)
+        writer.writerows(daily_rows)
+    logger.info(f"Generated {daily_csv} with {len(daily_rows)} rows.")
+
+    # 2. Generate garmin_activities.csv
+    activities_csv = "garmin_activities.csv"
+    activity_headers = [
+        "Activity ID", "Date", "Name", "Type", "Distance (km)",
+        "Duration (mins)", "Average HR (bpm)", "Max HR (bpm)", "Average Pace (min/km)"
+    ]
+    activity_rows = []
+    for d in sorted(all_data, key=lambda x: x.get("date", ""), reverse=True):
+        for act in d.get("activities", []):
+            dist_km = round(act.get("distance_meters", 0.0) / 1000.0, 2) if act.get("distance_meters") else ""
+            dur_mins = round(act.get("duration_seconds", 0.0) / 60.0, 2) if act.get("duration_seconds") else ""
+            
+            speed_ms = act.get("avg_pace_meter_per_sec")
+            pace_str = ""
+            if speed_ms and speed_ms > 0:
+                sec_per_km = 1000.0 / speed_ms
+                pace_mins = int(sec_per_km // 60)
+                pace_secs = int(sec_per_km % 60)
+                pace_str = f"{pace_mins:02d}:{pace_secs:02d}"
+
+            activity_rows.append([
+                act.get("activity_id", ""),
+                d.get("date", ""),
+                act.get("name", ""),
+                act.get("type", ""),
+                dist_km,
+                dur_mins,
+                act.get("average_hr", ""),
+                act.get("max_hr", ""),
+                pace_str
+            ])
+
+    with open(activities_csv, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(activity_headers)
+        writer.writerows(activity_rows)
+    logger.info(f"Generated {activities_csv} with {len(activity_rows)} rows.")
+
+    # Upload to Google Drive
     if drive_client:
         try:
-            drive_client.upload_file(output_filename, GOOGLE_DRIVE_FOLDER_ID)
-            logger.info(f"Uploaded {output_filename} to Google Drive")
+            drive_client.upload_file(daily_csv, GOOGLE_DRIVE_FOLDER_ID)
+            drive_client.upload_file(activities_csv, GOOGLE_DRIVE_FOLDER_ID)
+            logger.info("Updated garmin_daily_summary.csv and garmin_activities.csv on Google Drive.")
         except Exception as e:
-            logger.error(f"Failed to upload {output_filename} to Drive: {e}")
+            logger.error(f"Failed to upload Garmin files to Drive: {e}")
 
 if __name__ == "__main__":
     try:
