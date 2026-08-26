@@ -48,17 +48,17 @@ async function getExistingDriveCSV(drive, filename, folderId) {
     supportsAllDrives: true,
     includeItemsFromAllDrives: true
   });
-  if (!res.data.files.length) return { fileId: null, rows: [] };
+  if (!res.data.files || res.data.files.length === 0) return { fileId: null, rows: [] };
 
   const fileId = res.data.files[0].id;
   const fileData = await drive.files.get({ fileId, alt: 'media', supportsAllDrives: true }, { responseType: 'text' });
-  const lines = (fileData.data || '').trim().split('\n');
-  if (lines.length <= 1 || !lines[0]) return { fileId, rows: [] };
+  const lines = (fileData.data || '').trim().split('\n').filter(l => l.trim().length > 0);
+  if (lines.length <= 1) return { fileId, rows: [] };
 
-  const headers = lines[0].split(',');
+  const headers = lines[0].split(',').map(h => h.trim());
   const rows = lines.slice(1).map(line => {
     const vals = line.split(',');
-    return headers.reduce((acc, h, i) => { acc[h] = vals[i]; return acc; }, {});
+    return headers.reduce((acc, h, i) => { acc[h] = vals[i] !== undefined ? vals[i].trim() : ''; return acc; }, {});
   });
   return { fileId, rows };
 }
@@ -69,19 +69,31 @@ async function uploadCSVToDrive(drive, filename, folderId, fileId, csvContent) {
     body: Readable.from([csvContent])
   };
 
-  if (fileId) {
-    await drive.files.update({
-      fileId,
-      media,
-      supportsAllDrives: true
-    });
-  } else {
-    await drive.files.create({
-      resource: { name: filename, parents: [folderId] },
-      media,
-      fields: 'id',
-      supportsAllDrives: true
-    });
+  try {
+    if (fileId) {
+      await drive.files.update({
+        fileId,
+        media,
+        supportsAllDrives: true
+      });
+    } else {
+      await drive.files.create({
+        resource: { name: filename, parents: [folderId] },
+        media,
+        fields: 'id',
+        supportsAllDrives: true
+      });
+    }
+  } catch (err) {
+    if (err.message && (err.message.includes('storageQuotaExceeded') || err.message.includes('Service Accounts do not have storage quota'))) {
+      throw new Error(
+        `\n[Drive Storage Quota Error]\n` +
+        `The file '${filename}' was not found in Google Drive folder (${folderId}).\n` +
+        `Google Service Accounts cannot create new files in personal Drives.\n` +
+        `Please create a blank file named '${filename}' in that folder from your personal Google account.`
+      );
+    }
+    throw err;
   }
 }
 
@@ -125,7 +137,7 @@ async function main() {
     await uploadCSVToDrive(drive, config.outputFileName, config.folderId, fileId, csvContent);
     console.log(`Withings sync complete (${days} days requested). Total Drive rows: ${sortedRows.length}`);
   } catch (err) {
-    console.error('Error in Withings sync:', err);
+    console.error('Error in Withings sync:', err.message || err);
     process.exit(1);
   }
 }
