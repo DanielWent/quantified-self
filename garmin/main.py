@@ -29,7 +29,8 @@ def main(days: int = None):
         try:
             raw_stats = garmin_client.get_stats_for_date(date_str)
             parsed_data = parse_daily_summary(date_str, raw_stats)
-            rows_to_update.append(parsed_data)
+            if parsed_data:
+                rows_to_update.append(parsed_data)
         except Exception as e:
             logger.warning(f"Could not retrieve Garmin data for {date_str}: {e}")
 
@@ -37,7 +38,7 @@ def main(days: int = None):
         drive_client.upsert_rows(worksheet, rows_to_update, existing_records)
         logger.info(f"Successfully processed {len(rows_to_update)} Garmin records.")
     else:
-        logger.warning("No Garmin data retrieved to update.")
+        logger.warning("No Garmin records to update.")
 
 if __name__ == "__main__":
     main()
