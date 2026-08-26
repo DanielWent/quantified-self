@@ -4,9 +4,6 @@ import json
 import logging
 from datetime import datetime, timedelta
 from config import (
-    GARMIN_TOKENS,
-    GARMIN_EMAIL,
-    GARMIN_PASSWORD,
     GOOGLE_DRIVE_CREDENTIALS,
     GOOGLE_DRIVE_FOLDER_ID,
     DAYS_TO_SYNC
@@ -38,7 +35,12 @@ def sync_garmin_data(days=DAYS_TO_SYNC):
     
     activities = []
     try:
-        activities = garmin_client.get_activities(start_date.isoformat(), today.isoformat()) or []
+        activities = garmin_client.get_activities(
+            start_date=start_date.isoformat(),
+            end_date=today.isoformat(),
+            limit=max(days * 3, 1000)
+        ) or []
+        logger.info(f"Retrieved {len(activities)} activities across {days} days.")
     except Exception as e:
         logger.warning(f"Error fetching activities: {e}")
 
@@ -81,7 +83,7 @@ def sync_garmin_data(days=DAYS_TO_SYNC):
     output_filename = "garmin_data.json"
     with open(output_filename, "w", encoding="utf-8") as f:
         json.dump(all_data, f, indent=2, ensure_ascii=False)
-    logger.info(f"Saved {len(all_data)} records to {output_filename}")
+    logger.info(f"Saved {len(all_data)} daily records to {output_filename}")
 
     if drive_client:
         try:
@@ -92,7 +94,7 @@ def sync_garmin_data(days=DAYS_TO_SYNC):
 
 if __name__ == "__main__":
     try:
-        days_input = int(os.getenv("DAYS_TO_SYNC", DAYS_TO_SYNC))
+        days_input = int(os.getenv("DAYS_TO_SYNC", str(DAYS_TO_SYNC)))
     except (ValueError, TypeError):
         days_input = DAYS_TO_SYNC
     sync_garmin_data(days=days_input)
