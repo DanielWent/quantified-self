@@ -151,7 +151,7 @@ def generate_quantified_self():
     logger.info(f"Generated {activities_csv} with {len(activity_rows)} rows.")
 
     # 3. Google Drive / Sheets Sync
-    drive_creds = os.getenv("GOOGLE_DRIVE_CREDENTIALS")
+    drive_creds = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON") or os.getenv("GOOGLE_DRIVE_CREDENTIALS")
     folder_id = os.getenv("GOOGLE_DRIVE_FOLDER_ID")
     if drive_creds and DriveClient:
         try:
