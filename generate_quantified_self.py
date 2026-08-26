@@ -33,7 +33,7 @@ def get_gspread_client():
     return gspread.authorize(creds)
 
 def main():
-    logger.info(f"Aggregating Quantified Self data across full history (sync window: {DAYS_TO_SYNC} days)...")
+    logger.info(f"Aggregating Quantified Self data (configured sync window: {DAYS_TO_SYNC} days)...")
     gc = get_gspread_client()
     spreadsheet = gc.open_by_key(SPREADSHEET_KEY)
 
