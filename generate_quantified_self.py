@@ -1,95 +1,82 @@
-import io
-import json
-import logging
 import os
 import sys
-from typing import Optional
+import json
+import logging
 import pandas as pd
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
 from dotenv import load_dotenv
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'garmin'))
-from drive_client import DriveClient
-
 load_dotenv()
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
 
-SERVICE_ACCOUNT_JSON = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON")
-DRIVE_FOLDER_ID = os.getenv("GOOGLE_DRIVE_FOLDER_ID")
+SPREADSHEET_KEY = os.getenv("GOOGLE_SPREADSHEET_KEY")
+CREDENTIALS_JSON = os.getenv("GOOGLE_SHEETS_CREDENTIALS")
 
-GARMIN_FILENAME = "garmin_daily_summary.csv"
-WITHINGS_FILENAME = "withings_measurements.csv"
-OUTPUT_DATASET_FILENAME = "quantified_self.csv"
+if len(sys.argv) > 1 and sys.argv[1].isdigit():
+    DAYS_TO_SYNC = int(sys.argv[1])
+else:
+    DAYS_TO_SYNC = int(os.getenv("DAYS_TO_SYNC", os.getenv("DAYS", "7")))
 
-def load_csv(drive: Optional[DriveClient], filename: str) -> pd.DataFrame:
-    # 1. Check local file path
-    for local_path in [filename, os.path.join("data", filename)]:
-        if os.path.exists(local_path):
-            try:
-                df = pd.read_csv(local_path)
-                if not df.empty:
-                    logger.info(f"Loaded '{filename}' from local path: {local_path}")
-                    return df
-            except Exception:
-                pass
-
-    # 2. Check Google Drive
-    if drive:
-        try:
-            file_id = drive.find_file(filename)
-            if file_id:
-                fh = drive.download_csv(file_id)
-                df = pd.read_csv(fh)
-                if not df.empty:
-                    logger.info(f"Loaded '{filename}' from Google Drive.")
-                    return df
-        except Exception as e:
-            logger.warning(f"Error loading '{filename}' from Google Drive: {e}")
-
-    return pd.DataFrame()
-
-def build_quantified_self_dataset() -> None:
-    drive = None
-    if SERVICE_ACCOUNT_JSON and DRIVE_FOLDER_ID:
-        try:
-            drive = DriveClient(SERVICE_ACCOUNT_JSON, DRIVE_FOLDER_ID)
-        except Exception as e:
-            logger.warning(f"DriveClient initialization note: {e}")
-
-    garmin_df = load_csv(drive, GARMIN_FILENAME)
-    withings_df = load_csv(drive, WITHINGS_FILENAME)
-
-    if garmin_df.empty and withings_df.empty:
-        raise ValueError(
-            f"Could not load '{GARMIN_FILENAME}' or '{WITHINGS_FILENAME}' locally or from Google Drive."
-        )
-
-    if not garmin_df.empty and 'date' in garmin_df.columns:
-        garmin_df['date'] = garmin_df['date'].astype(str)
-    if not withings_df.empty and 'date' in withings_df.columns:
-        withings_df['date'] = withings_df['date'].astype(str)
-
-    if not garmin_df.empty and not withings_df.empty:
-        merged_df = pd.merge(garmin_df, withings_df, on='date', how='outer')
-    elif not garmin_df.empty:
-        merged_df = garmin_df
+def get_gspread_client():
+    scope = [
+        "https://spreadsheets.google.com/feeds",
+        "https://www.googleapis.com/auth/drive"
+    ]
+    if os.path.exists(CREDENTIALS_JSON):
+        creds = ServiceAccountCredentials.from_json_keyfile_name(CREDENTIALS_JSON, scope)
     else:
-        merged_df = withings_df
+        creds_dict = json.loads(CREDENTIALS_JSON)
+        creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+    return gspread.authorize(creds)
 
-    merged_df.sort_values(by='date', ascending=True, inplace=True)
-    merged_df.drop_duplicates(subset=['date'], keep='last', inplace=True)
+def main():
+    logger.info(f"Aggregating Quantified Self data across full history (sync window: {DAYS_TO_SYNC} days)...")
+    gc = get_gspread_client()
+    spreadsheet = gc.open_by_key(SPREADSHEET_KEY)
 
-    # Save output locally
-    os.makedirs("data", exist_ok=True)
-    local_out_path = os.path.join("data", OUTPUT_DATASET_FILENAME)
-    merged_df.to_csv(local_out_path, index=False)
-    logger.info(f"Saved dataset locally to {local_out_path} ({len(merged_df)} rows).")
+    garmin_sheet = spreadsheet.worksheet("Garmin")
+    withings_sheet = spreadsheet.worksheet("Withings")
 
-    # Upload merged dataset to Google Drive
-    if drive:
-        csv_content = merged_df.to_csv(index=False)
-        drive.upload_or_update_csv(OUTPUT_DATASET_FILENAME, csv_content)
-        logger.info(f"Uploaded '{OUTPUT_DATASET_FILENAME}' to Google Drive.")
+    garmin_data = garmin_sheet.get_all_records()
+    withings_data = withings_sheet.get_all_records()
+
+    if not garmin_data and not withings_data:
+        logger.warning("No data found in Garmin or Withings sheets.")
+        return
+
+    df_garmin = pd.DataFrame(garmin_data)
+    df_withings = pd.DataFrame(withings_data)
+
+    if not df_garmin.empty and "Date" in df_garmin.columns:
+        df_garmin["Date"] = pd.to_datetime(df_garmin["Date"]).dt.strftime("%Y-%m-%d")
+    if not df_withings.empty and "Date" in df_withings.columns:
+        df_withings["Date"] = pd.to_datetime(df_withings["Date"]).dt.strftime("%Y-%m-%d")
+
+    if not df_garmin.empty and not df_withings.empty:
+        merged_df = pd.merge(df_garmin, df_withings, on="Date", how="outer")
+    elif not df_garmin.empty:
+        merged_df = df_garmin
+    else:
+        merged_df = df_withings
+
+    merged_df.sort_values(by="Date", ascending=False, inplace=True)
+    merged_df.drop_duplicates(subset=["Date"], keep="first", inplace=True)
+    merged_df.fillna("", inplace=True)
+
+    try:
+        qs_sheet = spreadsheet.worksheet("Quantified Self")
+    except gspread.WorksheetNotFound:
+        qs_sheet = spreadsheet.add_worksheet(title="Quantified Self", rows=str(max(1000, len(merged_df) + 100)), cols="50")
+
+    header = merged_df.columns.tolist()
+    values = [header] + merged_df.values.tolist()
+
+    qs_sheet.clear()
+    qs_sheet.update("A1", values)
+    logger.info(f"Quantified Self sheet updated successfully with {len(merged_df)} total records.")
 
 if __name__ == "__main__":
-    build_quantified_self_dataset()
+    main()
