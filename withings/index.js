@@ -1,8 +1,12 @@
-const axios = require('axios');
-const fs = require('fs');
-const path = require('path');
-const config = require('./config');
-const { parseWithingsMeasures } = require('./utils');
+import axios from 'axios';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import config from './config.js';
+import { parseWithingsMeasures } from './utils.js';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 async function getAccessToken(clientId, clientSecret, refreshToken) {
   const response = await axios.post('https://wbsapi.withings.net/v2/oauth2', null, {
