@@ -1,4 +1,4 @@
-const MEASURE_TYPES = {
+export const MEASURE_TYPES = {
   1: 'weight_kg',
   4: 'height_m',
   5: 'fat_free_mass_kg',
@@ -13,7 +13,7 @@ const MEASURE_TYPES = {
   168: 'nerve_health_score'
 };
 
-function parseWithingsMeasures(measureGroups) {
+export function parseWithingsMeasures(measureGroups) {
   if (!Array.isArray(measureGroups)) {
     return [];
   }
@@ -46,8 +46,3 @@ function parseWithingsMeasures(measureGroups) {
 
   return Object.values(dailyRecords).sort((a, b) => a.date.localeCompare(b.date));
 }
-
-module.exports = {
-  MEASURE_TYPES,
-  parseWithingsMeasures
-};
