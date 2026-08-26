@@ -1,112 +1,56 @@
-import logging
 import os
-from typing import Any, Dict, List, Optional
-import garth
-from garminconnect import (
-    Garmin,
-    GarminConnectAuthenticationError,
-    GarminConnectConnectionError,
-    GarminConnectTooManyRequestsError,
-)
+import json
+import base64
+import logging
+from garminconnect import Garmin
+from config import GARMIN_TOKENS, GARMIN_EMAIL, GARMIN_PASSWORD
 
 logger = logging.getLogger(__name__)
 
 class GarminClient:
-    def __init__(self, email: Optional[str] = None, password: Optional[str] = None, tokenstore: Optional[str] = None):
-        self.email = email
-        self.password = password
-        self.tokenstore = os.path.expanduser(tokenstore) if tokenstore else None
-        self.client: Optional[Garmin] = None
+    def __init__(self):
+        self.token_base64 = GARMIN_TOKENS
+        self.email = GARMIN_EMAIL
+        self.password = GARMIN_PASSWORD
+        self.client = None
+        self._init_session()
 
-    def login(self) -> None:
+    def _init_session(self):
         try:
-            if self.tokenstore and os.path.exists(self.tokenstore) and os.listdir(self.tokenstore):
-                logger.info(f"Resuming Garth session from {self.tokenstore}")
-                garth.resume(self.tokenstore)
+            if self.token_base64:
+                token_json = base64.b64decode(self.token_base64).decode("utf-8")
+                token_dict = json.loads(token_json)
                 self.client = Garmin()
-                self.client.login()
-                logger.info("Successfully resumed Garmin session.")
-                return
-
-            if self.email and self.password:
-                logger.info("Logging into Garmin Connect with email/password...")
+                self.client.login(token_dict)
+                logger.info("Authenticated with Garmin using token.")
+            elif self.email and self.password:
                 self.client = Garmin(self.email, self.password)
                 self.client.login()
-                if self.tokenstore:
-                    os.makedirs(self.tokenstore, exist_ok=True)
-                    garth.save(self.tokenstore)
-                    logger.info(f"Saved session tokens to {self.tokenstore}")
-                return
-
-            raise GarminConnectAuthenticationError("Missing credentials or valid token store.")
+                logger.info("Authenticated with Garmin using credentials.")
+            else:
+                raise ValueError("Missing Garmin credentials or tokens.")
         except Exception as e:
-            logger.error(f"Garmin authentication failed: {e}")
+            logger.error(f"Garmin session initialization failed: {e}")
             raise
 
-    def get_user_summary(self, date_str: str) -> Optional[Dict[str, Any]]:
-        try:
-            return self.client.get_user_summary(date_str)
-        except Exception as e:
-            logger.warning(f"Could not fetch user summary for {date_str}: {e}")
-            return None
+    def get_stats(self, date_str):
+        return self.client.get_user_summary(date_str)
 
-    def get_sleep_data(self, date_str: str) -> Optional[Dict[str, Any]]:
-        try:
-            return self.client.get_sleep_data(date_str)
-        except Exception as e:
-            logger.warning(f"Could not fetch sleep data for {date_str}: {e}")
-            return None
+    def get_sleep_data(self, date_str):
+        return self.client.get_sleep_data(date_str)
 
-    def get_hrv_data(self, date_str: str) -> Optional[Dict[str, Any]]:
-        try:
-            return self.client.get_hrv_data(date_str)
-        except Exception as e:
-            logger.warning(f"Could not fetch HRV data for {date_str}: {e}")
-            return None
+    def get_rhr_data(self, date_str):
+        return self.client.get_rhr_day_data(date_str)
 
-    def get_body_battery(self, date_str: str) -> Optional[List[Dict[str, Any]]]:
-        try:
-            return self.client.get_body_battery(date_str)
-        except Exception as e:
-            logger.warning(f"Could not fetch body battery for {date_str}: {e}")
-            return None
+    def get_hrv_data(self, date_str):
+        return self.client.get_hrv_data(date_str)
 
-    def get_training_readiness(self, date_str: str) -> Optional[Dict[str, Any]]:
-        try:
-            return self.client.get_training_readiness(date_str)
-        except Exception as e:
-            logger.warning(f"Could not fetch training readiness for {date_str}: {e}")
-            return None
-
-    def get_respiration_data(self, date_str: str) -> Optional[Dict[str, Any]]:
-        try:
-            return self.client.get_respiration_data(date_str)
-        except Exception as e:
-            logger.warning(f"Could not fetch respiration data for {date_str}: {e}")
-            return None
-
-    def get_spo2_data(self, date_str: str) -> Optional[Dict[str, Any]]:
-        try:
-            return self.client.get_spo2_data(date_str)
-        except Exception as e:
-            logger.warning(f"Could not fetch SpO2 data for {date_str}: {e}")
-            return None
-
-    def get_max_metrics(self, date_str: str) -> Any:
-        try:
-            return self.client.get_max_metrics(date_str)
-        except Exception:
-            return None
-
-    def get_training_status(self, date_str: str) -> Any:
-        try:
-            return self.client.get_training_status(date_str)
-        except Exception:
-            return None
-
-    def get_activities(self, start: int = 0, limit: int = 50) -> List[Dict[str, Any]]:
-        try:
-            return self.client.get_activities(start, limit)
-        except Exception as e:
-            logger.error(f"Could not fetch activities: {e}")
-            return []
+    def get_activities(self, start_date=None, end_date=None, limit=2000):
+        if isinstance(start_date, int):
+            return self.client.get_activities(0, start_date)
+        if start_date and end_date and isinstance(start_date, str) and isinstance(end_date, str):
+            try:
+                return self.client.get_activities_by_date(start_date, end_date)
+            except Exception as e:
+                logger.warning(f"get_activities_by_date failed, falling back to paginated search: {e}")
+        return self.client.get_activities(0, limit)
