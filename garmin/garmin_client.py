@@ -8,6 +8,9 @@ import sys
 import time
 from typing import Any, Dict, List, Optional
 
+# Ensure directory is on sys.path for direct imports
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 from config import GARMIN_EMAIL, GARMIN_PASSWORD, GARMIN_TOKENS
 import garminconnect
 import garth
