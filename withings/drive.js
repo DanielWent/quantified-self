@@ -1,5 +1,4 @@
 import fs from 'fs';
-import { Readable } from 'stream';
 import { google } from 'googleapis';
 
 export function initDriveClient(credentialsRaw) {
@@ -30,12 +29,15 @@ export function initDriveClient(credentialsRaw) {
   }
 }
 
-export async function getWithingsTokenFromDrive(drive, folderId) {
+export async function uploadFileToDrive(drive, folderId, filePath) {
   if (!drive) {
     return null;
   }
   try {
-    let query = "name = 'withings_token.json' and trashed = false";
+    const fileName = filePath.split('/').pop().split('\\').pop();
+    const baseName = fileName.replace(/\.[^/.]+$/, "");
+
+    let query = `(name = '${fileName}' or name = '${baseName}') and trashed = false`;
     if (folderId) {
       query += ` and '${folderId}' in parents`;
     }
@@ -48,75 +50,25 @@ export async function getWithingsTokenFromDrive(drive, folderId) {
 
     const files = listRes.data.files || [];
     if (files.length === 0) {
+      console.error(`Cannot update '${fileName}': File not found in Google Drive folder.`);
       return null;
     }
 
     const fileId = files[0].id;
-    const getRes = await drive.files.get(
-      { fileId, alt: 'media' },
-      { responseType: 'json' }
-    );
-
-    if (getRes.data && getRes.data.refresh_token) {
-      console.log(`Loaded Withings refresh token from Google Drive (File ID: ${fileId})`);
-      return getRes.data.refresh_token;
-    }
-  } catch (err) {
-    console.warn('Could not retrieve withings_token.json from Google Drive:', err.message);
-  }
-  return null;
-}
-
-export async function saveWithingsTokenToDrive(drive, folderId, tokenPayload) {
-  if (!drive) {
-    return null;
-  }
-  try {
-    let query = "name = 'withings_token.json' and trashed = false";
-    if (folderId) {
-      query += ` and '${folderId}' in parents`;
-    }
-
-    const listRes = await drive.files.list({
-      q: query,
-      spaces: 'drive',
-      fields: 'files(id, name)'
-    });
-
-    const files = listRes.data.files || [];
-    const contentString = JSON.stringify(tokenPayload, null, 2);
     const media = {
-      mimeType: 'application/json',
-      body: Readable.from([contentString])
+      mimeType: 'text/csv',
+      body: fs.createReadStream(filePath)
     };
 
-    if (files.length > 0) {
-      const fileId = files[0].id;
-      await drive.files.update({
-        fileId,
-        media,
-        fields: 'id, name'
-      });
-      console.log(`Updated withings_token.json on Google Drive (File ID: ${fileId})`);
-      return fileId;
-    } else {
-      const requestBody = {
-        name: 'withings_token.json',
-        mimeType: 'application/json'
-      };
-      if (folderId) {
-        requestBody.parents = [folderId];
-      }
-      const createRes = await drive.files.create({
-        requestBody,
-        media,
-        fields: 'id, name'
-      });
-      console.log(`Created withings_token.json on Google Drive (File ID: ${createRes.data.id})`);
-      return createRes.data.id;
-    }
+    await drive.files.update({
+      fileId,
+      media,
+      fields: 'id, name'
+    });
+    console.log(`Updated '${files[0].name}' on Google Drive (File ID: ${fileId})`);
+    return fileId;
   } catch (err) {
-    console.error('Failed to save withings_token.json to Google Drive:', err.message);
+    console.error(`Failed to upload ${filePath} to Google Drive:`, err.message);
     return null;
   }
 }
