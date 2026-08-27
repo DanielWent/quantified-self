@@ -1,16 +1,17 @@
 import os
 import sys
-import logging
 from pathlib import Path
+import logging
 from datetime import datetime, timedelta
 import pandas as pd
 
-# Add current directory to Python path for direct imports
+# Guarantee both the script directory and repository root are on sys.path
 current_dir = Path(__file__).resolve().parent
-if str(current_dir) not in sys.path:
-    sys.path.insert(0, str(current_dir))
+repo_root = current_dir.parent
+for path in (str(current_dir), str(repo_root)):
+    if path not in sys.path:
+        sys.path.insert(0, path)
 
-# Support both execution from inside 'garmin/' and from repository root
 try:
     from garmin_client import GarminClient
     from parser import parse_garmin_day
