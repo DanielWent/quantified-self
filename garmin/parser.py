@@ -3,7 +3,6 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# ACSM VO2 Max Percentile Norms (10th, 20th, 30th, 40th, 50th, 60th, 70th, 80th, 90th, 95th)
 MALE_VO2_NORMS = {
     (20, 29): [(36.4, 10), (39.5, 20), (41.7, 30), (43.8, 40), (45.7, 50), (48.0, 60), (51.1, 70), (54.0, 80), (58.6, 90), (62.0, 95)],
     (30, 39): [(34.6, 10), (37.4, 20), (39.5, 30), (41.5, 40), (43.9, 50), (46.0, 60), (48.9, 70), (52.5, 80), (56.5, 90), (60.0, 95)],
@@ -49,13 +48,11 @@ def calculate_vo2_percentile(vo2_max, age, gender):
     return percentile
 
 def parse_garmin_day(summary: dict, profile: dict, settings: dict, max_metrics, target_date: str) -> dict:
-    # 1. User Demographic Information
     user_name = profile.get("fullName") or profile.get("userName") or ""
     gender = profile.get("gender") or settings.get("userData", {}).get("gender") or ""
     birth_date = profile.get("birthDate") or settings.get("userData", {}).get("birthDate")
     user_age = calculate_age(birth_date, target_date)
 
-    # 2. Physiological Max HR
     max_hr = (
         settings.get("userData", {}).get("maxHeartRate")
         or settings.get("userHeartRateZones", {}).get("maxHeartRate")
@@ -64,7 +61,6 @@ def parse_garmin_day(summary: dict, profile: dict, settings: dict, max_metrics, 
         or ""
     )
 
-    # 3. VO2 Max
     metric_entry = max_metrics[0] if isinstance(max_metrics, list) and max_metrics else (max_metrics if isinstance(max_metrics, dict) else {})
     generic_vo2 = metric_entry.get("generic", {}).get("vo2MaxPrecision") or metric_entry.get("generic", {}).get("vo2MaxValue")
     running_vo2 = metric_entry.get("running", {}).get("vo2MaxPrecision") or metric_entry.get("running", {}).get("vo2MaxValue")
