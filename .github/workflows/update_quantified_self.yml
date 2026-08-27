@@ -1,23 +1,15 @@
-name: Update Quantified Self Only
+name: Update Quantified Self Dataset
 
 on:
+  schedule:
+    - cron: '30 4 * * *'
   workflow_dispatch:
-    inputs:
-      days:
-        description: 'Number of past days to include in quantified self (default: 730)'
-        required: false
-        default: '730'
 
 jobs:
-  update-quantified-self:
+  update-summary:
     runs-on: ubuntu-latest
-    env:
-      DAYS_TO_SYNC: ${{ inputs.days || '730' }}
-      GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON || secrets.GOOGLE_DRIVE_CREDENTIALS }}
-      GOOGLE_DRIVE_FOLDER_ID: ${{ secrets.GOOGLE_DRIVE_FOLDER_ID }}
-
     steps:
-      - name: Checkout repository
+      - name: Check out repository
         uses: actions/checkout@v4
 
       - name: Set up Python
@@ -26,10 +18,14 @@ jobs:
           python-version: '3.11'
           cache: 'pip'
 
-      - name: Install Python dependencies
+      - name: Install dependencies
         run: |
-          pip install -r garmin/requirements.txt
+          python -m pip install --upgrade pip
+          if [ -f garmin/requirements.txt ]; then pip install -r garmin/requirements.txt; fi
 
-      - name: Generate Quantified Self CSV
+      - name: Generate Quantified Self Dataset
+        env:
+          GOOGLE_DRIVE_FOLDER_ID: ${{ secrets.GOOGLE_DRIVE_FOLDER_ID }}
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
         run: |
           python generate_quantified_self.py
