@@ -1,26 +1,15 @@
-name: Sync Quantified Self Data
+name: Sync Data to Google Drive
 
 on:
   schedule:
-    - cron: '0 6 * * *'
+    - cron: '0 4 * * *' # Runs daily at 04:00 UTC
   workflow_dispatch:
-    inputs:
-      days:
-        description: 'Number of days to sync'
-        required: false
-        default: '7'
 
 jobs:
   sync:
     runs-on: ubuntu-latest
-    env:
-      DAYS_TO_SYNC: ${{ inputs.days || github.event.inputs.days || '7' }}
-      GOOGLE_DRIVE_CREDENTIALS: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON || secrets.GOOGLE_DRIVE_CREDENTIALS }}
-      GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON || secrets.GOOGLE_DRIVE_CREDENTIALS }}
-      GOOGLE_DRIVE_FOLDER_ID: ${{ secrets.GOOGLE_DRIVE_FOLDER_ID }}
-
     steps:
-      - name: Checkout repository
+      - name: Check out repository
         uses: actions/checkout@v4
 
       - name: Set up Python
@@ -31,37 +20,36 @@ jobs:
 
       - name: Install Python dependencies
         run: |
-          pip install -r garmin/requirements.txt
-          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          python -m pip install --upgrade pip
+          if [ -f garmin/requirements.txt ]; then pip install -r garmin/requirements.txt; fi
+
+      - name: Sync Garmin Data
+        env:
+          GARMIN_EMAIL: ${{ secrets.GARMIN_EMAIL }}
+          GARMIN_PASSWORD: ${{ secrets.GARMIN_PASSWORD }}
+          GOOGLE_DRIVE_FOLDER_ID: ${{ secrets.GOOGLE_DRIVE_FOLDER_ID }}
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+        run: |
+          python -m garmin.sync_garmin
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: withings/package.json
 
       - name: Install Node dependencies
-        run: |
-          cd withings
-          npm install
+        working-directory: ./withings
+        run: npm ci
 
-      - name: Run Garmin Sync
-        env:
-          GARMIN_TOKENS: ${{ secrets.GARMIN_TOKENS }}
-          GARMIN_EMAIL: ${{ secrets.GARMIN_EMAIL }}
-          GARMIN_PASSWORD: ${{ secrets.GARMIN_PASSWORD }}
-        run: |
-          cd garmin
-          python sync_garmin.py
-
-      - name: Run Withings Sync
+      - name: Sync Withings Data
+        working-directory: ./withings
         env:
           WITHINGS_CLIENT_ID: ${{ secrets.WITHINGS_CLIENT_ID }}
           WITHINGS_CLIENT_SECRET: ${{ secrets.WITHINGS_CLIENT_SECRET }}
           WITHINGS_REFRESH_TOKEN: ${{ secrets.WITHINGS_REFRESH_TOKEN }}
+          GOOGLE_DRIVE_FOLDER_ID: ${{ secrets.GOOGLE_DRIVE_FOLDER_ID }}
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
         run: |
-          cd withings
           node index.js
-
-      - name: Generate Quantified Self
-        run: |
-          python generate_quantified_self.py
