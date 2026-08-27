@@ -1,6 +1,10 @@
 import logging
 from garminconnect import Garmin
-from garmin.exceptions import GarminAuthError
+
+try:
+    from exceptions import GarminAuthError
+except ImportError:
+    from garmin.exceptions import GarminAuthError
 
 logger = logging.getLogger(__name__)
 
