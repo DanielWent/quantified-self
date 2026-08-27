@@ -4,7 +4,11 @@ from garminconnect import Garmin
 try:
     from exceptions import GarminAuthError
 except ImportError:
-    from garmin.exceptions import GarminAuthError
+    try:
+        from garmin.exceptions import GarminAuthError
+    except ImportError:
+        class GarminAuthError(Exception):
+            pass
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +34,9 @@ class GarminClient:
     def get_user_settings(self) -> dict:
         """Fetches user biometrics including max heart rate."""
         try:
-            return self.client.garth.connectapi("/userprofile-service/userprofile/user-settings") or {}
+            if hasattr(self.client, "garth") and hasattr(self.client.garth, "connectapi"):
+                return self.client.garth.connectapi("/userprofile-service/userprofile/user-settings") or {}
+            return {}
         except Exception as e:
             logger.warning(f"Could not fetch user settings: {e}")
             return {}
@@ -43,7 +49,7 @@ class GarminClient:
             logger.error(f"Failed to fetch daily summary for {date_str}: {e}")
             return {}
 
-    def get_max_metrics(self, date_str: str) -> list:
+    def get_max_metrics(self, date_str: str):
         """Fetches VO2 Max metrics for a specific date."""
         try:
             return self.client.get_max_metrics(date_str) or []
