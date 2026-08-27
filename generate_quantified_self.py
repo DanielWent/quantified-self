@@ -1,125 +1,31 @@
 import os
-import sys
-import csv
 import json
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timezone
+from garmin.drive_client import GoogleDriveClient
+from garmin.config import GOOGLE_DRIVE_FOLDER_ID, GOOGLE_SERVICE_ACCOUNT_JSON
 
-sys.path.append(os.path.join(os.path.dirname(__file__), "garmin"))
-try:
-    from drive_client import DriveClient
-except ImportError:
-    DriveClient = None
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(message)s"
-)
-logger = logging.getLogger(__name__)
+def main():
+    if not GOOGLE_DRIVE_FOLDER_ID or not GOOGLE_SERVICE_ACCOUNT_JSON:
+        raise EnvironmentError("GOOGLE_DRIVE_FOLDER_ID and GOOGLE_SERVICE_ACCOUNT_JSON are required.")
 
-def resolve_data_file(filename, search_dirs=None):
-    if os.path.exists(filename):
-        return filename
-    if search_dirs:
-        for sdir in search_dirs:
-            candidate = os.path.join(sdir, filename)
-            if os.path.exists(candidate):
-                return candidate
-    return None
+    drive = GoogleDriveClient()
+    logging.info("Downloading latest raw data from Google Drive...")
+    
+    garmin_raw = drive.download_json("garmin_data.json") or {}
+    withings_raw = drive.download_json("withings_data.json") or {}
 
-def load_json_records(filename, search_dirs=None):
-    path = resolve_data_file(filename, search_dirs)
-    if path and os.path.exists(path):
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception as e:
-            logger.warning(f"Error loading {path}: {e}")
-    return []
-
-def generate_quantified_self():
-    try:
-        days = int(os.getenv("DAYS_TO_SYNC", "730"))
-    except (ValueError, TypeError):
-        days = 730
-
-    logger.info(f"Generating quantified_self.csv for the past {days} days...")
-
-    garmin_records = load_json_records("garmin_data.json", ["garmin", "."])
-    withings_records = load_json_records("withings_data.json", ["withings", "."])
-
-    cutoff_date = (datetime.now() - timedelta(days=days)).date().isoformat()
-
-    garmin_by_date = {
-        r.get("date"): r for r in garmin_records
-        if isinstance(r, dict) and r.get("date", "") >= cutoff_date
-    }
-    withings_by_date = {
-        r.get("date"): r for r in withings_records
-        if isinstance(r, dict) and r.get("date", "") >= cutoff_date
+    logging.info("Compiling Quantified Self summary...")
+    compiled_dataset = {
+        "last_updated": datetime.now(timezone.utc).isoformat(),
+        "garmin": garmin_raw,
+        "withings": withings_raw,
     }
 
-    all_dates = sorted(
-        list(set(list(garmin_by_date.keys()) + list(withings_by_date.keys()))),
-        reverse=True
-    )
-
-    # Generate quantified_self.csv (Merged dataset)
-    qs_csv = "quantified_self.csv"
-    qs_headers = [
-        "Date", "Steps", "Distance (km)", "VO2 Max", "Resting Heart Rate (bpm)",
-        "HRV Avg (ms)", "Sleep Duration (hours)", "Sleep Score",
-        "Weight (kg)", "Fat Ratio (%)", "Fat Mass (kg)", "Muscle Mass (kg)",
-        "Hydration (kg)", "Bone Mass (kg)", "Pulse Wave Velocity (m/s)",
-        "Visceral Fat", "Vascular Age", "Nerve Health Score"
-    ]
-
-    qs_rows = []
-    for d in all_dates:
-        g = garmin_by_date.get(d, {})
-        w = withings_by_date.get(d, {})
-        wm = w.get("measures", {})
-
-        distance_km = round(g.get("distance_meters", 0.0) / 1000.0, 2) if g.get("distance_meters") else ""
-        sleep_hrs = round(g.get("sleep_duration_seconds", 0) / 3600.0, 2) if g.get("sleep_duration_seconds") else ""
-
-        qs_rows.append([
-            d,
-            g.get("steps", ""),
-            distance_km,
-            g.get("vo2_max", ""),
-            g.get("resting_heart_rate", ""),
-            g.get("hrv_avg", ""),
-            sleep_hrs,
-            g.get("sleep_score", ""),
-            wm.get("weight_kg", ""),
-            wm.get("fat_ratio_pct", ""),
-            wm.get("fat_mass_weight_kg", ""),
-            wm.get("muscle_mass_kg", ""),
-            wm.get("hydration_kg", ""),
-            wm.get("bone_mass_kg", ""),
-            wm.get("pulse_wave_velocity_ms", ""),
-            wm.get("visceral_fat", ""),
-            wm.get("vascular_age", ""),
-            wm.get("nerve_health_score", "")
-        ])
-
-    with open(qs_csv, "w", newline="", encoding="utf-8") as f:
-        writer = csv.writer(f)
-        writer.writerow(qs_headers)
-        writer.writerows(qs_rows)
-    logger.info(f"Generated {qs_csv} with {len(qs_rows)} rows.")
-
-    # Upload quantified_self.csv to Google Drive
-    drive_creds = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON") or os.getenv("GOOGLE_DRIVE_CREDENTIALS")
-    folder_id = os.getenv("GOOGLE_DRIVE_FOLDER_ID")
-    if drive_creds and DriveClient:
-        try:
-            drive_client = DriveClient(drive_creds, folder_id)
-            drive_client.upload_file(qs_csv, folder_id)
-            logger.info("Updated quantified_self.csv on Google Drive.")
-        except Exception as e:
-            logger.error(f"Failed Drive upload: {e}")
+    file_id = drive.upload_json("quantified_self_summary.json", compiled_dataset)
+    logging.info("Quantified self dataset generated and updated. File ID: %s", file_id)
 
 if __name__ == "__main__":
-    generate_quantified_self()
+    main()
