@@ -1,28 +1,31 @@
-name: Setup Withings Token
+name: Setup Withings Auth
 
 on:
   workflow_dispatch:
-    inputs:
-      auth_code:
-        description: 'Withings Authorization Code'
-        required: true
 
 jobs:
-  get-token:
+  setup:
     runs-on: ubuntu-latest
     steps:
-      - name: Exchange Auth Code for Refresh Token
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: withings/package.json
+
+      - name: Install dependencies
+        working-directory: ./withings
+        run: npm ci
+
+      - name: Run Setup Script
+        working-directory: ./withings
         env:
-          CLIENT_ID: ${{ secrets.WITHINGS_CLIENT_ID }}
-          CLIENT_SECRET: ${{ secrets.WITHINGS_CLIENT_SECRET }}
-          AUTH_CODE: ${{ github.event.inputs.auth_code }}
-          REDIRECT_URI: "http://localhost:8080/callback"
+          WITHINGS_CLIENT_ID: ${{ secrets.WITHINGS_CLIENT_ID }}
+          WITHINGS_CLIENT_SECRET: ${{ secrets.WITHINGS_CLIENT_SECRET }}
+          WITHINGS_REFRESH_TOKEN: ${{ secrets.WITHINGS_REFRESH_TOKEN }}
         run: |
-          RESPONSE=$(curl -s -X POST https://wbsapi.withings.net/v2/oauth2 \
-            -d "action=requesttoken" \
-            -d "grant_type=authorization_code" \
-            -d "client_id=$CLIENT_ID" \
-            -d "client_secret=$CLIENT_SECRET" \
-            -d "code=$AUTH_CODE" \
-            -d "redirect_uri=$REDIRECT_URI")
-          echo "Response: $RESPONSE"
+          node utils.js --setup
